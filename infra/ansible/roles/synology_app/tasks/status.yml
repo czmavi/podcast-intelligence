@@ -1,0 +1,42 @@
+---
+- name: Načíst stav Synology kontejnerů
+  ansible.builtin.raw: >-
+    /usr/local/bin/docker compose
+    --project-directory {{ synology_install_root | quote }}
+    --env-file {{ (synology_install_root ~ '/.env') | quote }}
+    -f {{ (synology_install_root ~ '/compose.yml') | quote }}
+    ps
+  become: true
+  register: synology_compose_status
+  changed_when: false
+
+- name: Ověřit web health
+  ansible.builtin.raw: >-
+    python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"
+  register: synology_status_health
+  changed_when: false
+
+- name: Ověřit dokončení migrace na Synology
+  ansible.builtin.raw: "test -f {{ synology_migration_marker | quote }}"
+  become: true
+  changed_when: false
+
+- name: Načíst velikost databáze
+  ansible.builtin.raw: >-
+    /usr/local/bin/docker compose
+    --project-directory {{ synology_install_root | quote }}
+    --env-file {{ (synology_install_root ~ '/.env') | quote }}
+    -f {{ (synology_install_root ~ '/compose.yml') | quote }}
+    exec -T postgres psql -U podcast -d podcast -Atc
+    'SELECT pg_size_pretty(pg_database_size(current_database()))'
+  become: true
+  register: synology_database_size
+  changed_when: false
+
+- name: Zobrazit stav Synology stacku
+  ansible.builtin.debug:
+    msg:
+      containers: "{{ synology_compose_status.stdout_lines }}"
+      database_size: "{{ synology_database_size.stdout | trim }}"
+      migration_complete: true
+      web_health: ok

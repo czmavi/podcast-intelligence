@@ -1,0 +1,145 @@
+name: podcast-intelligence
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_DB: podcast
+      POSTGRES_USER: podcast
+      POSTGRES_PASSWORD: podcast
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U podcast -d podcast"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+
+  migrate:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    command: ["deno", "task", "db:migrate"]
+    environment: &deno-env
+      DATABASE_URL: postgres://podcast:podcast@postgres:5432/podcast
+      STORAGE_ROOT: /data
+      AUDIO_ML_URL: ${AUDIO_ML_URL:-http://audio-ml:8001}
+      AUDIO_ML_API_TOKEN: ${AUDIO_ML_API_TOKEN:-}
+      AUDIO_ML_SHARED_ROOT: /data
+      AUDIO_ML_IDLE_TIMEOUT_MS: ${AUDIO_ML_IDLE_TIMEOUT_MS:-1800000}
+      TEXT_EMBEDDING_MODEL: ${TEXT_EMBEDDING_MODEL:-BAAI/bge-m3}
+      TEXT_EMBEDDING_DIMENSIONS: ${TEXT_EMBEDDING_DIMENSIONS:-1024}
+      TEXT_RERANKER_MODEL: ${TEXT_RERANKER_MODEL:-BAAI/bge-reranker-v2-m3}
+      SEARCH_CANDIDATE_LIMIT: ${SEARCH_CANDIDATE_LIMIT:-50}
+      SEARCH_MIN_RERANK_SCORE: ${SEARCH_MIN_RERANK_SCORE:-0.2}
+      ANSWER_GENERATION_PROVIDER: ${ANSWER_GENERATION_PROVIDER:-disabled}
+      ANSWER_GENERATION_BASE_URL: ${ANSWER_GENERATION_BASE_URL:-}
+      ANSWER_GENERATION_MODEL: ${ANSWER_GENERATION_MODEL:-bottlecapai/ThinkingCap-Qwen3.6-27B-NVFP4}
+      ANSWER_GENERATION_API_KEY: ${ANSWER_GENERATION_API_KEY:-}
+      ANSWER_GENERATION_TIMEOUT_MS: ${ANSWER_GENERATION_TIMEOUT_MS:-180000}
+      ANSWER_GENERATION_MAX_TOKENS: ${ANSWER_GENERATION_MAX_TOKENS:-500}
+      ANSWER_GENERATION_REASONING_EFFORT: ${ANSWER_GENERATION_REASONING_EFFORT:-none}
+      ANSWER_GENERATION_THINKING_TOKEN_BUDGET: ${ANSWER_GENERATION_THINKING_TOKEN_BUDGET:-2048}
+      ASR_CORRECTION_MODEL: ${ASR_CORRECTION_MODEL:-}
+      ASR_CORRECTION_AUTO_APPLY_THRESHOLD: ${ASR_CORRECTION_AUTO_APPLY_THRESHOLD:-0.85}
+      ASR_CORRECTION_CONCURRENCY: ${ASR_CORRECTION_CONCURRENCY:-4}
+      ASR_CORRECTION_CONTEXT_SIZE: ${ASR_CORRECTION_CONTEXT_SIZE:-90}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_ANSWER_MODEL: ${OPENAI_ANSWER_MODEL:-gpt-5.6-luna}
+      OPENAI_ANSWER_TIMEOUT_MS: ${OPENAI_ANSWER_TIMEOUT_MS:-180000}
+      OPENAI_ANSWER_MAX_TOKENS: ${OPENAI_ANSWER_MAX_TOKENS:-4000}
+      OPENAI_ANSWER_REASONING_EFFORT: ${OPENAI_ANSWER_REASONING_EFFORT:-low}
+      PUSHOVER_APP_TOKEN: ${PUSHOVER_APP_TOKEN:-}
+      PUSHOVER_USER_KEY: ${PUSHOVER_USER_KEY:-}
+      PUSHOVER_NOTIFICATION_COOLDOWN_MS: ${PUSHOVER_NOTIFICATION_COOLDOWN_MS:-10800000}
+      APP_BASE_URL: http://localhost:8000
+      APP_ENV: production
+      AUTH_MODE: disabled
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    command: ["deno", "run", "-A", "apps/web/main.ts"]
+    environment: *deno-env
+    volumes:
+      - podcast-storage:/data
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: [
+        "CMD",
+        "deno",
+        "eval",
+        "await fetch('http://localhost:8000/health').then(r => { if (!r.ok) Deno.exit(1) })",
+      ]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    ports:
+      - "8000:8000"
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    command: ["deno", "run", "-A", "apps/worker/main.ts"]
+    environment:
+      <<: *deno-env
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
+      DOWNLOAD_WORKER_CONCURRENCY: ${DOWNLOAD_WORKER_CONCURRENCY:-2}
+      AUTO_PROCESS_INTERVAL_MS: ${AUTO_PROCESS_INTERVAL_MS:-60000}
+    volumes:
+      - podcast-storage:/data
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  audio-ml:
+    build:
+      context: services/audio-ml
+    environment:
+      AUDIO_ML_SHARED_ROOT: /data
+      AUDIO_ML_API_TOKEN: ${AUDIO_ML_API_TOKEN:-}
+      HF_TOKEN: ${HF_TOKEN:-}
+      WHISPER_MODEL: ${WHISPER_MODEL:-openai/whisper-large-v3}
+      DIARIZATION_MODEL: ${DIARIZATION_MODEL:-pyannote/speaker-diarization-community-1}
+      SPEAKER_EMBEDDING_MODEL: ${SPEAKER_EMBEDDING_MODEL:-pyannote/wespeaker-voxceleb-resnet34-LM}
+      TEXT_EMBEDDING_MODEL: ${TEXT_EMBEDDING_MODEL:-BAAI/bge-m3}
+      TEXT_RERANKER_MODEL: ${TEXT_RERANKER_MODEL:-BAAI/bge-reranker-v2-m3}
+      TRANSCRIPTION_CHUNK_SECONDS: ${TRANSCRIPTION_CHUNK_SECONDS:-300}
+      TRANSCRIPTION_OVERLAP_SECONDS: ${TRANSCRIPTION_OVERLAP_SECONDS:-5}
+      TRANSCRIPTION_CHECKPOINT_ROOT: /checkpoints
+      TRANSCRIPTION_CHUNK_MAX_ATTEMPTS: ${TRANSCRIPTION_CHUNK_MAX_ATTEMPTS:-3}
+      TRANSCRIPTION_CHUNK_RETRY_BASE_SECONDS: ${TRANSCRIPTION_CHUNK_RETRY_BASE_SECONDS:-2}
+      AUDIO_PIPELINE_MAX_CONCURRENCY: ${AUDIO_PIPELINE_MAX_CONCURRENCY:-1}
+      PYANNOTE_METRICS_ENABLED: "0"
+    volumes:
+      - podcast-storage:/data:ro
+      - model-cache:/root/.cache
+      - transcription-checkpoints:/checkpoints
+    healthcheck:
+      test: [
+        "CMD",
+        "python",
+        "-c",
+        "import urllib.request; urllib.request.urlopen('http://localhost:8001/health/live')",
+      ]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+    ports:
+      - "127.0.0.1:8001:8001"
+
+volumes:
+  postgres-data:
+  podcast-storage:
+  model-cache:
+  transcription-checkpoints:

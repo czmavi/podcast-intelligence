@@ -1,0 +1,73 @@
+name: podcast-intelligence
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: podcast
+      POSTGRES_USER: podcast
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - type: bind
+        source: {{ synology_postgres_root }}
+        target: /var/lib/postgresql/data
+      - type: bind
+        source: {{ synology_backup_root }}
+        target: /backups
+        read_only: true
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U podcast -d podcast"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    image: podcast-web:managed
+    command: ["deno", "task", "db:migrate"]
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  web:
+    image: podcast-web:managed
+    build:
+      context: ./source
+      dockerfile: apps/web/Dockerfile
+    command: ["deno", "run", "-A", "apps/web/main.ts"]
+    env_file:
+      - .env
+    restart: unless-stopped
+    volumes:
+      - type: bind
+        source: {{ synology_podcast_root }}
+        target: /data
+    healthcheck:
+      test:
+        - CMD
+        - deno
+        - eval
+        - await fetch('http://localhost:8000/health').then(r => { if (!r.ok) Deno.exit(1) })
+      interval: 10s
+      timeout: 3s
+      retries: 12
+    ports:
+      - "8000:8000"
+
+  worker:
+    image: podcast-worker:managed
+    build:
+      context: ./source
+      dockerfile: apps/worker/Dockerfile
+    command: ["deno", "run", "-A", "apps/worker/main.ts"]
+    env_file:
+      - .env
+    restart: unless-stopped
+    stop_grace_period: 35m
+    volumes:
+      - type: bind
+        source: {{ synology_podcast_root }}
+        target: /data

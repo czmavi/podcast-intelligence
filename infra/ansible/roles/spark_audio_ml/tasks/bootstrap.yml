@@ -1,0 +1,72 @@
+---
+- name: Ověřit architekturu Sparku
+  ansible.builtin.assert:
+    that:
+      - ansible_facts["architecture"] == "aarch64"
+    fail_msg: "Tento inventory host není očekávaný ARM64 DGX Spark."
+
+- name: Ověřit povinnou konfiguraci
+  ansible.builtin.assert:
+    that:
+      - nas_host | length > 0
+      - nas_share | length > 0
+      - nas_username | length > 0
+      - nas_password | length > 0
+      - audio_ml_api_token | length >= 32
+    fail_msg: "Doplňte NAS_* a AUDIO_ML_API_TOKEN do kořenového .env."
+  no_log: true
+
+- name: Ověřit Docker CLI
+  ansible.builtin.command:
+    argv:
+      - docker
+      - --version
+  changed_when: false
+
+- name: Ověřit CIFS klienta
+  ansible.builtin.command:
+    argv:
+      - mount.cifs
+      - -V
+  changed_when: false
+
+- name: Ověřit NVIDIA Container Toolkit
+  ansible.builtin.command:
+    argv:
+      - nvidia-ctk
+      - --version
+  changed_when: false
+
+- name: Ověřit Docker přístup bez sudo
+  ansible.builtin.command:
+    argv:
+      - docker
+      - info
+  changed_when: false
+
+- name: Ověřit NVIDIA runtime
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --gpus=all
+      - nvcr.io/nvidia/cuda:13.0.1-base-ubuntu24.04
+      - nvidia-smi
+  changed_when: false
+
+- name: Ověřit dostupnost SMB na Synology
+  ansible.builtin.wait_for:
+    host: "{{ nas_host }}"
+    port: 445
+    connect_timeout: 5
+    timeout: 10
+  register: nas_smb
+  retries: 3
+  delay: 2
+  until: nas_smb is succeeded
+
+- name: Upozornit na chybějící Hugging Face token
+  ansible.builtin.debug:
+    msg: "HF_TOKEN je prázdný; přepis poběží, ale diarizace nebude dostupná."
+  when: hf_token | length == 0

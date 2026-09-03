@@ -1,0 +1,67 @@
+---
+- name: Připravit Synology aplikační stack
+  ansible.builtin.include_tasks: prepare.yml
+
+- name: Spustit dopředné databázové migrace
+  ansible.builtin.raw: >-
+    /usr/local/bin/docker compose
+    --project-directory {{ synology_install_root | quote }}
+    --env-file {{ (synology_install_root ~ '/.env') | quote }}
+    -f {{ (synology_install_root ~ '/compose.yml') | quote }}
+    run --rm migrate
+  become: true
+  changed_when: true
+  no_log: true
+
+- name: Spustit web a worker
+  ansible.builtin.raw: >-
+    /usr/local/bin/docker compose
+    --project-directory {{ synology_install_root | quote }}
+    --env-file {{ (synology_install_root ~ '/.env') | quote }}
+    -f {{ (synology_install_root ~ '/compose.yml') | quote }}
+    up -d --no-deps web worker
+  become: true
+  changed_when: true
+
+- name: Počkat na web
+  ansible.builtin.raw: >-
+    python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"
+  register: synology_web_health
+  retries: 30
+  delay: 3
+  until: synology_web_health.rc == 0
+  changed_when: false
+
+- name: Ověřit read-write podcast storage z web kontejneru
+  ansible.builtin.raw: >-
+    /usr/local/bin/docker compose
+    --project-directory {{ synology_install_root | quote }}
+    --env-file {{ (synology_install_root ~ '/.env') | quote }}
+    -f {{ (synology_install_root ~ '/compose.yml') | quote }}
+    exec -T web deno eval
+    "const path = '/data/.podcast-tool-write-' + crypto.randomUUID();
+    await Deno.writeTextFile(path, 'ok', { createNew: true });
+    await Deno.remove(path);"
+  become: true
+  changed_when: false
+
+- name: Ověřit audio ML API z web kontejneru
+  ansible.builtin.raw: >-
+    /usr/local/bin/docker compose
+    --project-directory {{ synology_install_root | quote }}
+    --env-file {{ (synology_install_root ~ '/.env') | quote }}
+    -f {{ (synology_install_root ~ '/compose.yml') | quote }}
+    exec -T web deno eval
+    "const base = Deno.env.get('AUDIO_ML_URL');
+    const token = Deno.env.get('AUDIO_ML_API_TOKEN');
+    const response = await fetch(base + '/health/ready', {
+    headers: { Authorization: 'Bearer ' + token }});
+    if (!response.ok) Deno.exit(1);"
+  become: true
+  changed_when: false
+  no_log: true
+
+- name: Označit dokončené Synology nasazení
+  ansible.builtin.raw: "touch {{ synology_migration_marker | quote }}"
+  become: true
+  changed_when: true

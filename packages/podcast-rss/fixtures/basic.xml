@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"
+  xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>Testovací podcast</title>
+    <link>https://example.test/podcast</link>
+    <description><![CDATA[<p>Český &amp; bezpečný popis.</p>]]></description>
+    <itunes:image href="https://example.test/cover.jpg"/>
+    <item>
+      <guid>episode-1</guid>
+      <title>První díl</title>
+      <content:encoded><![CDATA[<p>Hostem je Jana.</p>]]></content:encoded>
+      <pubDate>Mon, 01 Jan 2024 10:00:00 GMT</pubDate>
+      <itunes:duration>01:02:03</itunes:duration>
+      <enclosure url="https://example.test/audio/one.mp3" length="1234" type="audio/mpeg"/>
+    </item>
+    <item>
+      <title>Druhý díl bez GUID</title>
+      <description><![CDATA[<b>Popis</b> bez GUID.]]></description>
+      <enclosure url="/audio/two.mp3" type="audio/mpeg"/>
+    </item>
+    <item>
+      <guid>episode-1</guid>
+      <title>Duplicitní díl</title>
+      <enclosure url="https://example.test/audio/duplicate.mp3" type="audio/mpeg"/>
+    </item>
+    <item>
+      <guid>not-audio</guid>
+      <title>Dokument</title>
+      <enclosure url="https://example.test/file.pdf" type="application/pdf"/>
+    </item>
+  </channel>
+</rss>

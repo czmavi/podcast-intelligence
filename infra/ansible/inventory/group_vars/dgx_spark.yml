@@ -1,0 +1,35 @@
+podcast_repo_root: "{{ inventory_dir | dirname | dirname | dirname }}"
+podcast_env_file: "{{ podcast_repo_root }}/.env"
+
+spark_install_root: "/home/{{ ansible_user }}/.local/share/podcast-audio-ml"
+spark_source_root: "{{ spark_install_root }}/source"
+
+answer_llm_install_root: "/home/{{ ansible_user }}/.local/share/podcast-answer-llm"
+answer_llm_image: "vllm/vllm-openai@sha256:0a51ea5b4ae2dc5d81890e5173f54203d2a3ae0cfffe51b8fd2afd4391bfd967"
+answer_llm_model: "bottlecapai/ThinkingCap-Qwen3.6-27B-NVFP4"
+answer_llm_api_token: "{{ audio_ml_api_token }}"
+answer_llm_model_cache_volume: "podcast-answer-benchmark_vllm-model-cache"
+
+nas_host: >-
+  {{ lookup('ansible.builtin.ini', 'NAS_HOST type=properties file=' ~ podcast_env_file) }}
+nas_share: >-
+  {{ lookup('ansible.builtin.ini', 'NAS_SHARE type=properties file=' ~ podcast_env_file) }}
+nas_username: >-
+  {{ lookup('ansible.builtin.ini', 'NAS_USERNAME type=properties file=' ~ podcast_env_file) }}
+nas_password: >-
+  {{ lookup('ansible.builtin.ini', 'NAS_PASSWORD type=properties file=' ~ podcast_env_file) }}
+audio_ml_api_token: >-
+  {{ lookup('ansible.builtin.ini', 'AUDIO_ML_API_TOKEN type=properties file=' ~ podcast_env_file) }}
+hf_token: >-
+  {{ lookup('ansible.builtin.ini', 'HF_TOKEN type=properties file=' ~ podcast_env_file) }}
+
+whisper_model: >-
+  {{ lookup('ansible.builtin.ini', 'WHISPER_MODEL type=properties file=' ~ podcast_env_file) }}
+diarization_model: >-
+  {{ lookup('ansible.builtin.ini', 'DIARIZATION_MODEL type=properties file=' ~ podcast_env_file) }}
+speaker_embedding_model: >-
+  {{ lookup('ansible.builtin.ini', 'SPEAKER_EMBEDDING_MODEL type=properties file=' ~ podcast_env_file) }}
+text_embedding_model: >-
+  {{ lookup('ansible.builtin.ini', 'TEXT_EMBEDDING_MODEL type=properties file=' ~ podcast_env_file) }}
+text_reranker_model: >-
+  {{ lookup('ansible.builtin.ini', 'TEXT_RERANKER_MODEL type=properties file=' ~ podcast_env_file) }}

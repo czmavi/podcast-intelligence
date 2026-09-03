@@ -1,0 +1,9 @@
+---
+- name: Ověřit podcast audio ML na DGX Spark
+  hosts: dgx_spark
+  gather_facts: false
+  tasks:
+    - name: Načíst stav služby
+      ansible.builtin.include_role:
+        name: spark_audio_ml
+        tasks_from: status.yml

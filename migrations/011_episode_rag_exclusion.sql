@@ -1,0 +1,2 @@
+ALTER TABLE episodes
+  ADD COLUMN rag_excluded BOOLEAN NOT NULL DEFAULT false;

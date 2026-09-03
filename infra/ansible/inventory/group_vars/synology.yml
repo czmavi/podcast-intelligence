@@ -1,0 +1,113 @@
+podcast_repo_root: "{{ inventory_dir | dirname | dirname | dirname }}"
+podcast_env_file: "{{ podcast_repo_root }}/.env"
+
+ansible_host: >-
+  {{ lookup('ansible.builtin.ini', 'NAS_HOST type=properties file=' ~ podcast_env_file) }}
+ansible_user: >-
+  {{ lookup('ansible.builtin.ini', 'NAS_ANSIBLE_USER type=properties file=' ~ podcast_env_file) }}
+ansible_password: >-
+  {{ lookup('ansible.builtin.ini', 'NAS_ANSIBLE_PASSWORD type=properties file=' ~ podcast_env_file) }}
+ansible_become_password: "{{ ansible_password }}"
+ansible_ssh_password_mechanism: ssh_askpass
+
+synology_install_root: /volume1/docker/podcast-tool
+synology_source_root: "{{ synology_install_root }}/source"
+synology_postgres_root: "{{ synology_install_root }}/postgres"
+synology_backup_root: "{{ synology_install_root }}/backups"
+synology_podcast_root: "/volume1/{{ nas_share }}"
+synology_postgres_password_file: "{{ synology_install_root }}/.postgres-password"
+synology_migration_marker: "{{ synology_install_root }}/.migration-complete"
+
+nas_share: >-
+  {{ lookup('ansible.builtin.ini', 'NAS_SHARE type=properties file=' ~ podcast_env_file) }}
+audio_ml_url: >-
+  {{ lookup('ansible.builtin.ini', 'AUDIO_ML_URL type=properties file=' ~ podcast_env_file) }}
+audio_ml_api_token: >-
+  {{ lookup('ansible.builtin.ini', 'AUDIO_ML_API_TOKEN type=properties file=' ~ podcast_env_file) }}
+audio_ml_idle_timeout_ms: >-
+  {{ lookup('ansible.builtin.ini', 'AUDIO_ML_IDLE_TIMEOUT_MS type=properties file=' ~ podcast_env_file) }}
+text_embedding_provider: >-
+  {{ lookup('ansible.builtin.ini', 'TEXT_EMBEDDING_PROVIDER type=properties file=' ~ podcast_env_file) }}
+text_embedding_model: >-
+  {{ lookup('ansible.builtin.ini', 'TEXT_EMBEDDING_MODEL type=properties file=' ~ podcast_env_file) }}
+text_embedding_dimensions: >-
+  {{ lookup('ansible.builtin.ini', 'TEXT_EMBEDDING_DIMENSIONS type=properties file=' ~ podcast_env_file) }}
+text_reranker_model: >-
+  {{ lookup('ansible.builtin.ini', 'TEXT_RERANKER_MODEL type=properties file=' ~ podcast_env_file) }}
+search_candidate_limit: >-
+  {{ lookup('ansible.builtin.ini', 'SEARCH_CANDIDATE_LIMIT type=properties file=' ~ podcast_env_file) }}
+search_min_rerank_score: >-
+  {{ lookup('ansible.builtin.ini', 'SEARCH_MIN_RERANK_SCORE type=properties file=' ~ podcast_env_file) }}
+speaker_embedding_dimensions: >-
+  {{ lookup('ansible.builtin.ini', 'SPEAKER_EMBEDDING_DIMENSIONS type=properties file=' ~ podcast_env_file) }}
+default_transcription_language: >-
+  {{ lookup('ansible.builtin.ini', 'DEFAULT_TRANSCRIPTION_LANGUAGE type=properties file=' ~ podcast_env_file) }}
+job_poll_interval_ms: >-
+  {{ lookup('ansible.builtin.ini', 'JOB_POLL_INTERVAL_MS type=properties file=' ~ podcast_env_file) }}
+job_lock_timeout_seconds: >-
+  {{ lookup('ansible.builtin.ini', 'JOB_LOCK_TIMEOUT_SECONDS type=properties file=' ~ podcast_env_file) }}
+worker_concurrency: >-
+  {{ lookup('ansible.builtin.ini', 'WORKER_CONCURRENCY type=properties file=' ~ podcast_env_file) }}
+download_worker_concurrency: >-
+  {{ lookup('ansible.builtin.ini', 'DOWNLOAD_WORKER_CONCURRENCY', type='properties',
+     file=podcast_env_file, default='2') }}
+auto_process_interval_ms: >-
+  {{ lookup('ansible.builtin.ini', 'AUTO_PROCESS_INTERVAL_MS type=properties file=' ~ podcast_env_file) }}
+max_job_attempts: >-
+  {{ lookup('ansible.builtin.ini', 'MAX_JOB_ATTEMPTS type=properties file=' ~ podcast_env_file) }}
+pushover_app_token: >-
+  {{ lookup('ansible.builtin.ini', 'PUSHOVER_APP_TOKEN', type='properties',
+     file=podcast_env_file, default='') }}
+pushover_user_key: >-
+  {{ lookup('ansible.builtin.ini', 'PUSHOVER_USER_KEY', type='properties',
+     file=podcast_env_file, default='') }}
+pushover_notification_cooldown_ms: >-
+  {{ lookup('ansible.builtin.ini', 'PUSHOVER_NOTIFICATION_COOLDOWN_MS', type='properties',
+     file=podcast_env_file, default='10800000') }}
+log_level: >-
+  {{ lookup('ansible.builtin.ini', 'LOG_LEVEL type=properties file=' ~ podcast_env_file) }}
+auth_mode: >-
+  {{ lookup('ansible.builtin.ini', 'AUTH_MODE type=properties file=' ~ podcast_env_file) }}
+answer_generation_provider: >-
+  {{ lookup('ansible.builtin.ini', 'ANSWER_GENERATION_PROVIDER type=properties file=' ~ podcast_env_file) }}
+answer_generation_base_url: >-
+  {{ lookup('ansible.builtin.ini', 'ANSWER_GENERATION_BASE_URL type=properties file=' ~ podcast_env_file) }}
+answer_generation_model: >-
+  {{ lookup('ansible.builtin.ini', 'ANSWER_GENERATION_MODEL type=properties file=' ~ podcast_env_file) }}
+answer_generation_api_key: >-
+  {{ lookup('ansible.builtin.ini', 'ANSWER_GENERATION_API_KEY type=properties file=' ~ podcast_env_file) }}
+answer_generation_timeout_ms: >-
+  {{ lookup('ansible.builtin.ini', 'ANSWER_GENERATION_TIMEOUT_MS type=properties file=' ~ podcast_env_file) }}
+answer_generation_max_tokens: >-
+  {{ lookup('ansible.builtin.ini', 'ANSWER_GENERATION_MAX_TOKENS type=properties file=' ~ podcast_env_file) }}
+answer_generation_reasoning_effort: >-
+  {{ lookup('ansible.builtin.ini', 'ANSWER_GENERATION_REASONING_EFFORT type=properties file=' ~ podcast_env_file) }}
+answer_generation_thinking_token_budget: >-
+  {{ lookup('ansible.builtin.ini', 'ANSWER_GENERATION_THINKING_TOKEN_BUDGET type=properties file=' ~ podcast_env_file) }}
+asr_correction_model: >-
+  {{ lookup('ansible.builtin.ini', 'ASR_CORRECTION_MODEL', type='properties',
+     file=podcast_env_file, default='') }}
+asr_correction_auto_apply_threshold: >-
+  {{ lookup('ansible.builtin.ini', 'ASR_CORRECTION_AUTO_APPLY_THRESHOLD', type='properties',
+     file=podcast_env_file, default='0.85') }}
+asr_correction_concurrency: >-
+  {{ lookup('ansible.builtin.ini', 'ASR_CORRECTION_CONCURRENCY', type='properties',
+     file=podcast_env_file, default='4') }}
+asr_correction_context_size: >-
+  {{ lookup('ansible.builtin.ini', 'ASR_CORRECTION_CONTEXT_SIZE', type='properties',
+     file=podcast_env_file, default='90') }}
+openai_api_key: >-
+  {{ lookup('ansible.builtin.ini', 'OPENAI_API_KEY', type='properties',
+     file=podcast_env_file, default='') }}
+openai_answer_model: >-
+  {{ lookup('ansible.builtin.ini', 'OPENAI_ANSWER_MODEL', type='properties',
+     file=podcast_env_file, default='gpt-5.6-luna') }}
+openai_answer_timeout_ms: >-
+  {{ lookup('ansible.builtin.ini', 'OPENAI_ANSWER_TIMEOUT_MS', type='properties',
+     file=podcast_env_file, default='180000') }}
+openai_answer_max_tokens: >-
+  {{ lookup('ansible.builtin.ini', 'OPENAI_ANSWER_MAX_TOKENS', type='properties',
+     file=podcast_env_file, default='4000') }}
+openai_answer_reasoning_effort: >-
+  {{ lookup('ansible.builtin.ini', 'OPENAI_ANSWER_REASONING_EFFORT', type='properties',
+     file=podcast_env_file, default='low') }}

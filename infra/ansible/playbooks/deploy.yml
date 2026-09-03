@@ -1,0 +1,6 @@
+---
+- name: Nasadit podcast audio ML na DGX Spark
+  hosts: dgx_spark
+  gather_facts: true
+  roles:
+    - role: spark_audio_ml

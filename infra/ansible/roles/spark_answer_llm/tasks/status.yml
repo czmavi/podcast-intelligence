@@ -1,0 +1,28 @@
+---
+- name: Načíst health Answer LLM
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8002/health
+    return_content: true
+    status_code: 200
+  register: answer_llm_health
+
+- name: Načíst stav Answer LLM kontejneru
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - --env-file
+      - .env
+      - -f
+      - compose.yml
+      - ps
+  args:
+    chdir: "{{ answer_llm_install_root }}"
+  changed_when: false
+  register: answer_llm_compose_status
+
+- name: Vypsat bezpečné shrnutí Answer LLM
+  ansible.builtin.debug:
+    msg:
+      health_http_status: "{{ answer_llm_health.status }}"
+      containers: "{{ answer_llm_compose_status.stdout_lines }}"

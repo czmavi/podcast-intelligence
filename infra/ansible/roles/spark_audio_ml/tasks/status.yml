@@ -1,0 +1,38 @@
+---
+- name: Načíst stav ML API
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8001/health/ready
+    headers:
+      Authorization: "Bearer {{ audio_ml_api_token }}"
+    return_content: true
+    status_code: 200
+  register: ml_status
+  no_log: true
+
+- name: Vypsat bezpečné shrnutí stavu
+  ansible.builtin.debug:
+    msg:
+      status: "{{ ml_status.json.status }}"
+      gpu_available: "{{ ml_status.json.gpuAvailable }}"
+      models: "{{ ml_status.json.models }}"
+      audio_pipeline_concurrency: "{{ ml_status.json.audioPipelineConcurrency | default('not deployed') }}"
+      hf_token_available: "{{ ml_status.json.hfTokenAvailable }}"
+
+- name: Vypsat stav kontejneru
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - --env-file
+      - .env
+      - -f
+      - compose.yml
+      - ps
+  args:
+    chdir: "{{ spark_install_root }}"
+  changed_when: false
+  register: compose_status
+
+- name: Zobrazit stav kontejneru
+  ansible.builtin.debug:
+    var: compose_status.stdout_lines

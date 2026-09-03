@@ -1,0 +1,216 @@
+---
+- name: Vytvořit dočasný lokální archiv zdrojů
+  ansible.builtin.tempfile:
+    state: file
+    suffix: .tgz
+  delegate_to: localhost
+  become: false
+  register: synology_source_archive
+
+- name: Zabalit aplikační zdroje na řídicím počítači
+  ansible.builtin.command:
+    argv:
+      - tar
+      - -czf
+      - "{{ synology_source_archive.path }}"
+      - -C
+      - "{{ podcast_repo_root }}"
+      - deno.json
+      - apps
+      - packages
+      - migrations
+      - scripts
+  environment:
+    COPYFILE_DISABLE: "1"
+  delegate_to: localhost
+  become: false
+  changed_when: false
+
+- name: Zakódovat archiv pro přenos bez vzdáleného Pythonu
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - base64
+      - -A
+      - -in
+      - "{{ synology_source_archive.path }}"
+  delegate_to: localhost
+  become: false
+  register: synology_source_archive_base64
+  changed_when: false
+  no_log: true
+
+- name: Vytvořit aplikační adresáře
+  ansible.builtin.raw: >-
+    install -d -m 0750
+    {{ synology_install_root | quote }}
+    {{ synology_source_root | quote }}
+    {{ synology_backup_root | quote }}
+  become: true
+  changed_when: false
+
+- name: Vytvořit PostgreSQL datový adresář
+  ansible.builtin.raw: >-
+    install -d -o 999 -g 999 -m 0700 {{ synology_postgres_root | quote }}
+  become: true
+  changed_when: false
+
+- name: Zkontrolovat persistentní PostgreSQL heslo
+  ansible.builtin.raw: "test -s {{ synology_postgres_password_file | quote }}"
+  become: true
+  register: synology_postgres_password_state
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: Vygenerovat PostgreSQL heslo při prvním nasazení
+  ansible.builtin.raw: openssl rand -hex 32
+  become: true
+  register: synology_generated_postgres_password
+  when: synology_postgres_password_state.rc != 0
+  changed_when: true
+  no_log: true
+
+- name: Uložit nové PostgreSQL heslo
+  ansible.builtin.raw: >-
+    umask 077 && printf '%s\n' {{ synology_generated_postgres_password.stdout | trim | quote }}
+    > {{ synology_postgres_password_file | quote }}
+  become: true
+  when: synology_postgres_password_state.rc != 0
+  changed_when: true
+  no_log: true
+
+- name: Načíst persistentní PostgreSQL heslo
+  ansible.builtin.raw: "cat {{ synology_postgres_password_file | quote }}"
+  become: true
+  register: synology_postgres_password_content
+  changed_when: false
+  no_log: true
+
+- name: Připravit PostgreSQL heslo pro šablonu
+  ansible.builtin.set_fact:
+    synology_postgres_password: "{{ synology_postgres_password_content.stdout | trim }}"
+  no_log: true
+
+- name: Rozdělit archiv na části bezpečné pro Synology SSH
+  ansible.builtin.set_fact:
+    synology_source_archive_chunks: >-
+      {{ synology_source_archive_base64.stdout | regex_findall('.{1,60000}') }}
+  no_log: true
+
+- name: Připravit dočasný soubor archivu na Synology
+  ansible.builtin.raw: >-
+    umask 077 && : > {{ (synology_install_root ~ '/.source.tgz.b64.tmp') | quote }}
+  become: true
+  changed_when: true
+
+- name: Přenést části aplikačního archivu
+  ansible.builtin.raw: >-
+    printf '%s' {{ item | quote }} >>
+    {{ (synology_install_root ~ '/.source.tgz.b64.tmp') | quote }}
+  become: true
+  loop: "{{ synology_source_archive_chunks }}"
+  changed_when: true
+  no_log: true
+
+- name: Rozbalit přenesené aplikační zdroje
+  ansible.builtin.raw: >-
+    base64 -d {{ (synology_install_root ~ '/.source.tgz.b64.tmp') | quote }} |
+    tar -xzf - -C {{ synology_source_root | quote }} &&
+    rm -f {{ (synology_install_root ~ '/.source.tgz.b64.tmp') | quote }}
+  become: true
+  changed_when: true
+
+- name: Odstranit dočasný lokální archiv
+  ansible.builtin.file:
+    path: "{{ synology_source_archive.path }}"
+    state: absent
+  delegate_to: localhost
+  become: false
+  changed_when: false
+
+- name: Vyrenderovat produkční Compose konfiguraci
+  ansible.builtin.set_fact:
+    synology_compose_rendered: "{{ lookup('ansible.builtin.template', role_path ~ '/templates/compose.yml.j2') }}"
+
+- name: Nainstalovat produkční Compose konfiguraci
+  ansible.builtin.raw: >-
+    printf '%s' {{ synology_compose_rendered | b64encode | quote }} |
+    base64 -d > {{ (synology_install_root ~ '/compose.yml.tmp') | quote }} &&
+    chmod 0644 {{ (synology_install_root ~ '/compose.yml.tmp') | quote }} &&
+    mv {{ (synology_install_root ~ '/compose.yml.tmp') | quote }}
+    {{ (synology_install_root ~ '/compose.yml') | quote }}
+  become: true
+  changed_when: true
+
+- name: Vyrenderovat tajnou aplikační konfiguraci
+  ansible.builtin.set_fact:
+    synology_environment_rendered: "{{ lookup('ansible.builtin.template', role_path ~ '/templates/app.env.j2') }}"
+  no_log: true
+
+- name: Nainstalovat tajnou aplikační konfiguraci
+  ansible.builtin.raw: >-
+    printf '%s' {{ synology_environment_rendered | b64encode | quote }} |
+    base64 -d > {{ (synology_install_root ~ '/.env.tmp') | quote }} &&
+    chmod 0600 {{ (synology_install_root ~ '/.env.tmp') | quote }} &&
+    mv {{ (synology_install_root ~ '/.env.tmp') | quote }}
+    {{ (synology_install_root ~ '/.env') | quote }}
+  become: true
+  changed_when: true
+  no_log: true
+
+- name: Validovat produkční Compose konfiguraci
+  ansible.builtin.raw: >-
+    /usr/local/bin/docker compose
+    --project-directory {{ synology_install_root | quote }}
+    --env-file {{ (synology_install_root ~ '/.env') | quote }}
+    -f {{ (synology_install_root ~ '/compose.yml') | quote }}
+    config --quiet
+  become: true
+  changed_when: false
+  no_log: true
+
+- name: Sestavit aplikační image
+  ansible.builtin.raw: >-
+    /usr/local/bin/docker compose
+    --project-directory {{ synology_install_root | quote }}
+    --env-file {{ (synology_install_root ~ '/.env') | quote }}
+    -f {{ (synology_install_root ~ '/compose.yml') | quote }}
+    build --pull web worker
+  become: true
+  changed_when: true
+
+- name: Stáhnout PostgreSQL image
+  ansible.builtin.raw: >-
+    /usr/local/bin/docker compose
+    --project-directory {{ synology_install_root | quote }}
+    --env-file {{ (synology_install_root ~ '/.env') | quote }}
+    -f {{ (synology_install_root ~ '/compose.yml') | quote }}
+    pull postgres
+  become: true
+  changed_when: false
+
+- name: Spustit PostgreSQL
+  ansible.builtin.raw: >-
+    /usr/local/bin/docker compose
+    --project-directory {{ synology_install_root | quote }}
+    --env-file {{ (synology_install_root ~ '/.env') | quote }}
+    -f {{ (synology_install_root ~ '/compose.yml') | quote }}
+    up -d postgres
+  become: true
+  changed_when: true
+
+- name: Počkat na PostgreSQL
+  ansible.builtin.raw: >-
+    /usr/local/bin/docker compose
+    --project-directory {{ synology_install_root | quote }}
+    --env-file {{ (synology_install_root ~ '/.env') | quote }}
+    -f {{ (synology_install_root ~ '/compose.yml') | quote }}
+    exec -T postgres pg_isready -U podcast -d podcast
+  become: true
+  register: synology_postgres_ready
+  retries: 20
+  delay: 3
+  until: synology_postgres_ready.rc == 0
+  changed_when: false
+  no_log: true

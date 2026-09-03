@@ -1,0 +1,7 @@
+volumes:
+  podcast-storage:
+    driver: local
+    driver_opts:
+      type: cifs
+      device: "//${NAS_HOST}/${NAS_SHARE}"
+      o: "addr=${NAS_HOST},username=${NAS_USERNAME},password=${NAS_PASSWORD},vers=3.0,rw,iocharset=utf8,noserverino,file_mode=0660,dir_mode=0770"

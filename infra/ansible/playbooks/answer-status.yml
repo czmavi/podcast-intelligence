@@ -1,0 +1,9 @@
+---
+- name: Ověřit Answer LLM na DGX Spark
+  hosts: dgx_spark
+  gather_facts: false
+  tasks:
+    - name: Načíst stav Answer LLM
+      ansible.builtin.include_role:
+        name: spark_answer_llm
+        tasks_from: status.yml

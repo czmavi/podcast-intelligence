@@ -1,0 +1,10 @@
+.env
+.DS_Store
+.venv/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+storage/*
+!storage/.gitkeep
+services/audio-ml/models/
+coverage/

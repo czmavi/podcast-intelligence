@@ -1,0 +1,122 @@
+---
+- name: Vytvořit adresáře služby
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0700"
+  loop:
+    - "{{ spark_install_root }}"
+    - "{{ spark_source_root }}"
+
+- name: Přenést zdrojový kód ML služby
+  ansible.builtin.copy:
+    src: "{{ podcast_repo_root }}/services/audio-ml/"
+    dest: "{{ spark_source_root }}/"
+    mode: preserve
+  register: ml_source
+
+- name: Nainstalovat Compose konfiguraci
+  ansible.builtin.template:
+    src: compose.yml.j2
+    dest: "{{ spark_install_root }}/compose.yml"
+    mode: "0600"
+  register: ml_compose
+
+- name: Nainstalovat tajnou konfiguraci služby
+  ansible.builtin.template:
+    src: audio-ml.env.j2
+    dest: "{{ spark_install_root }}/.env"
+    mode: "0600"
+  no_log: true
+  register: ml_environment
+
+- name: Validovat Compose konfiguraci
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - --env-file
+      - .env
+      - -f
+      - compose.yml
+      - config
+      - --quiet
+  args:
+    chdir: "{{ spark_install_root }}"
+  changed_when: false
+  no_log: true
+
+- name: Sestavit ARM64 ML image
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - --env-file
+      - .env
+      - -f
+      - compose.yml
+      - build
+      - --pull
+  args:
+    chdir: "{{ spark_install_root }}"
+  register: ml_build
+  changed_when: true
+
+- name: Spustit aktualizovanou ML službu
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - --env-file
+      - .env
+      - -f
+      - compose.yml
+      - up
+      - -d
+      - --remove-orphans
+  args:
+    chdir: "{{ spark_install_root }}"
+  register: ml_up
+  changed_when: >-
+    'Started' in ml_up.stdout or 'Created' in ml_up.stdout or
+    'Recreated' in ml_up.stdout
+  no_log: true
+
+- name: Ověřit read-only Synology mount v ML kontejneru
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - --env-file
+      - .env
+      - -f
+      - compose.yml
+      - exec
+      - -T
+      - audio-ml
+      - python
+      - -c
+      - "from pathlib import Path; root = Path('/data').resolve(strict=True); next(root.iterdir(), None)"
+  args:
+    chdir: "{{ spark_install_root }}"
+  changed_when: false
+  no_log: true
+
+- name: Počkat na připravenost ML API
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8001/health/ready
+    headers:
+      Authorization: "Bearer {{ audio_ml_api_token }}"
+    return_content: true
+    status_code: 200
+  register: ml_ready
+  retries: 120
+  delay: 5
+  until: ml_ready.status == 200
+  no_log: true
+
+- name: Ověřit GPU v běžícím kontejneru
+  ansible.builtin.assert:
+    that:
+      - ml_ready.json.gpuAvailable | bool
+    fail_msg: "ML služba běží, ale uvnitř kontejneru není dostupná GPU."

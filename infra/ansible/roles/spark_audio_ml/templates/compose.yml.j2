@@ -1,0 +1,36 @@
+name: podcast-audio-ml
+
+services:
+  audio-ml:
+    build:
+      context: ./source
+    image: podcast-audio-ml:managed
+    restart: unless-stopped
+    gpus: all
+    env_file:
+      - .env
+    volumes:
+      - podcast-storage:/data:ro
+      - model-cache:/root/.cache
+      - transcription-checkpoints:/checkpoints
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://localhost:8001/health/live')
+      interval: 15s
+      timeout: 5s
+      retries: 20
+    ports:
+      - "0.0.0.0:8001:8001"
+
+volumes:
+  podcast-storage:
+    driver: local
+    driver_opts:
+      type: cifs
+      device: "//${NAS_HOST}/${NAS_SHARE}"
+      o: "addr=${NAS_HOST},username=${NAS_USERNAME},password=${NAS_PASSWORD},vers=3.0,ro,iocharset=utf8,noserverino,file_mode=0444,dir_mode=0555"
+  model-cache:
+  transcription-checkpoints:

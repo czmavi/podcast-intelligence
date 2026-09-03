@@ -1,0 +1,107 @@
+---
+- name: Vytvořit adresář Answer LLM služby
+  ansible.builtin.file:
+    path: "{{ answer_llm_install_root }}"
+    state: directory
+    mode: "0700"
+
+- name: Nainstalovat Compose konfiguraci Answer LLM
+  ansible.builtin.template:
+    src: compose.yml.j2
+    dest: "{{ answer_llm_install_root }}/compose.yml"
+    mode: "0600"
+
+- name: Nainstalovat tajnou konfiguraci Answer LLM
+  ansible.builtin.template:
+    src: answer-llm.env.j2
+    dest: "{{ answer_llm_install_root }}/.env"
+    mode: "0600"
+  no_log: true
+
+- name: Připravit perzistentní cache vLLM modelu
+  ansible.builtin.command:
+    argv:
+      - docker
+      - volume
+      - create
+      - "{{ answer_llm_model_cache_volume }}"
+  changed_when: false
+
+- name: Validovat Answer LLM Compose konfiguraci
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - --env-file
+      - .env
+      - -f
+      - compose.yml
+      - config
+      - --quiet
+  args:
+    chdir: "{{ answer_llm_install_root }}"
+  changed_when: false
+  no_log: true
+
+- name: Stáhnout ARM64 CUDA image Answer LLM
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - --env-file
+      - .env
+      - -f
+      - compose.yml
+      - pull
+      - answer-llm
+  args:
+    chdir: "{{ answer_llm_install_root }}"
+  register: answer_llm_pull
+  changed_when: "'Pulled' in answer_llm_pull.stdout"
+
+- name: Spustit Answer LLM bez zásahu do audio-ml
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - --env-file
+      - .env
+      - -f
+      - compose.yml
+      - up
+      - -d
+      - answer-llm
+  args:
+    chdir: "{{ answer_llm_install_root }}"
+  register: answer_llm_up
+  changed_when: >-
+    'Started' in answer_llm_up.stdout or 'Created' in answer_llm_up.stdout or
+    'Recreated' in answer_llm_up.stdout
+  no_log: true
+
+- name: Počkat na načtení modelu a připravenost Answer LLM
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8002/health
+    return_content: true
+    status_code: 200
+  register: answer_llm_ready
+  retries: 180
+  delay: 10
+  until: answer_llm_ready.status == 200
+  no_log: true
+
+- name: Ověřit autentizované OpenAI API
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8002/v1/models
+    headers:
+      Authorization: "Bearer {{ answer_llm_api_token }}"
+    return_content: true
+    status_code: 200
+  register: answer_llm_models
+  no_log: true
+
+- name: Potvrdit dostupnost modelu
+  ansible.builtin.assert:
+    that:
+      - answer_llm_models.json.data | length > 0
+    fail_msg: "Answer LLM API nevrátilo žádný načtený model."

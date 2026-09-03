@@ -1,0 +1,9 @@
+---
+- name: Připravit aplikační stack na Synology bez spuštění writerů
+  hosts: synology
+  gather_facts: false
+  tasks:
+    - name: Spustit přípravu Synology
+      ansible.builtin.include_role:
+        name: synology_app
+        tasks_from: prepare.yml

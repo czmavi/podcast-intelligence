@@ -1,0 +1,56 @@
+name: podcast-answer-llm
+
+services:
+  answer-llm:
+    image: {{ answer_llm_image }}
+    restart: unless-stopped
+    gpus: all
+    ipc: host
+    env_file:
+      - .env
+    environment:
+      VLLM_API_KEY: ${ANSWER_LLM_API_TOKEN}
+    command:
+      - ${ANSWER_LLM_MODEL}
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8002"
+      - --max-model-len
+      - "16384"
+      - --gpu-memory-utilization
+      - "0.30"
+      - --max-num-seqs
+      - "2"
+      - --max-num-batched-tokens
+      - "8192"
+      - --enable-chunked-prefill
+      - --enable-prefix-caching
+      - --kv-cache-dtype
+      - fp8
+      - --attention-backend
+      - FLASHINFER
+      - --reasoning-parser
+      - qwen3
+      - --default-chat-template-kwargs
+      - '{"enable_thinking": false}'
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    volumes:
+      - vllm-model-cache:/root/.cache/huggingface/hub
+      - vllm-compile-cache:/root/.cache/vllm
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8002/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 120
+      start_period: 30s
+    ports:
+      - "0.0.0.0:8002:8002"
+
+volumes:
+  vllm-model-cache:
+    external: true
+    name: {{ answer_llm_model_cache_volume }}
+  vllm-compile-cache:

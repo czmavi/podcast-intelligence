@@ -1,0 +1,68 @@
+---
+- name: Ověřit připravenost Synology pro aplikační stack
+  hosts: synology
+  gather_facts: false
+  tasks:
+    - name: Ověřit CPU architekturu
+      ansible.builtin.raw: uname -m
+      register: synology_architecture
+      changed_when: false
+
+    - name: Vyžadovat x86-64 Synology
+      ansible.builtin.assert:
+        that:
+          - synology_architecture.stdout | trim == 'x86_64'
+        fail_msg: "Aplikační image vyžadují na Synology ověřenou x86-64 cestu."
+
+    - name: Načíst verzi DSM
+      ansible.builtin.raw: cat /etc/VERSION
+      register: synology_dsm_version
+      changed_when: false
+
+    - name: Ověřit Python pro Ansible moduly
+      ansible.builtin.raw: python3 --version
+      register: synology_python
+      changed_when: false
+
+    - name: Ověřit Docker Engine
+      ansible.builtin.raw: /usr/local/bin/docker version --format '{{ "{{" }}.Server.Version{{ "}}" }}'
+      become: true
+      register: synology_docker_version
+      changed_when: false
+
+    - name: Ověřit Docker Compose
+      ansible.builtin.raw: /usr/local/bin/docker compose version --short
+      become: true
+      register: synology_compose_version
+      changed_when: false
+
+    - name: Ověřit podcastovou sdílenou složku
+      ansible.builtin.raw: "test -d {{ synology_podcast_root | quote }}"
+      changed_when: false
+
+    - name: Ověřit volné místo cílového volume
+      ansible.builtin.raw: df -Pk /volume1
+      register: synology_volume_space
+      changed_when: false
+
+    - name: Ověřit sudo oprávnění deployment účtu
+      ansible.builtin.raw: id -u
+      become: true
+      register: synology_root_id
+      changed_when: false
+      no_log: true
+
+    - name: Vyžadovat úspěšné zvýšení oprávnění
+      ansible.builtin.assert:
+        that:
+          - synology_root_id.stdout | trim == '0'
+        fail_msg: "NAS_ANSIBLE_USER musí mít na DSM funkční sudo oprávnění."
+
+    - name: Zobrazit bezpečný souhrn kontroly
+      ansible.builtin.debug:
+        msg:
+          architecture: "{{ synology_architecture.stdout | trim }}"
+          python: "{{ synology_python.stdout | trim }}"
+          docker: "{{ synology_docker_version.stdout | trim }}"
+          compose: "{{ synology_compose_version.stdout | trim }}"
+          volume: "{{ synology_volume_space.stdout_lines | last }}"

@@ -1,0 +1,6 @@
+---
+- name: Spustit kontroly Sparku
+  ansible.builtin.include_tasks: bootstrap.yml
+
+- name: Nasadit ML službu
+  ansible.builtin.include_tasks: deploy.yml

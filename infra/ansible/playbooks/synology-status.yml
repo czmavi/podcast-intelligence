@@ -1,0 +1,9 @@
+---
+- name: Ověřit aplikační stack na Synology
+  hosts: synology
+  gather_facts: false
+  tasks:
+    - name: Načíst stav Synology deploymentu
+      ansible.builtin.include_role:
+        name: synology_app
+        tasks_from: status.yml

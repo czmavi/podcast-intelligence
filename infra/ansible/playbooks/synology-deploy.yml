@@ -1,0 +1,9 @@
+---
+- name: Nasadit aplikační stack na Synology
+  hosts: synology
+  gather_facts: false
+  tasks:
+    - name: Spustit Synology deployment
+      ansible.builtin.include_role:
+        name: synology_app
+        tasks_from: deploy.yml
