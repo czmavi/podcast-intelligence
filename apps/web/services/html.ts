@@ -108,6 +108,14 @@ export function podcastSettingsBody(podcast: Record<string, unknown>): string {
             Ve frontě nebo právě stahovaných je ${prefetchActiveCount} epizod.</div>`
       : '<p class="meta">Aktivní hromadné stahování právě neprobíhá.</p>'
   }
+        ${
+    settingsToggle(
+      `/api/podcasts/${podcastId}/auto-download`,
+      "Automatické stahování nových dílů",
+      "Při aktualizaci RSS stáhne pouze nově nalezené díly. Pro pravidelnou kontrolu zapněte také automatickou denní aktualizaci. Přepis řídí automatické zpracování.",
+      Boolean(podcast.autoDownloadEnabled),
+    )
+  }
         <div class="settings-actions"><button class="secondary"
           data-action="/api/podcasts/${podcastId}/download-missing"
           data-loading-label="Zařazuji stahování…"

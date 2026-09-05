@@ -12,6 +12,10 @@ export const updatePodcastAutoProcessingSchema = z.object({
   enabled: z.boolean(),
 });
 
+export const updatePodcastAutoDownloadSchema = z.object({
+  enabled: z.boolean(),
+});
+
 export const updatePodcastAutoRefreshSchema = z.object({
   enabled: z.boolean(),
 });

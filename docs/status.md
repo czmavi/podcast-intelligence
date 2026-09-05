@@ -2,6 +2,9 @@
 
 ## Hotové a ověřené
 
+- checkbox automatického stahování nových dílů v nastavení podcastu; RSS import zařazuje nově
+  nalezené epizody transakčně a idempotentně pouze ke stažení, bez spuštění ML,
+- počítadlo „ve frontě / běží“ ignoruje stav `downloaded`,
 - strict Deno workspace, konfigurace, migrace a Compose konfigurace,
 - idempotentní RSS parser/import včetně namespaces, HTML, fallback ID a bezpečné obnovy, která
   zachová epizody odstraněné z feedu; iTunes i standardní RSS logo se při refreshi aktualizuje,

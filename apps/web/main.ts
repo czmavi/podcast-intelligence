@@ -20,6 +20,7 @@ import {
   processEpisodeSchema,
   searchSchema,
   updateEpisodeRagExclusionSchema,
+  updatePodcastAutoDownloadSchema,
   updatePodcastAutoProcessingSchema,
   updatePodcastAutoRefreshSchema,
   updatePodcastTranscriptAlignmentSchema,
@@ -443,7 +444,7 @@ async function api(request: Request, url: URL): Promise<Response | null> {
 
   if (pathname === "/api/podcasts" && request.method === "POST") {
     const input = createPodcastSchema.parse(await readJson(request));
-    return json(await importPodcast(sql, input.rssUrl), 201);
+    return json(await importPodcast(sql, input.rssUrl, config.MAX_JOB_ATTEMPTS), 201);
   }
   if (pathname === "/api/podcasts" && request.method === "GET") {
     return json(
@@ -464,7 +465,7 @@ async function api(request: Request, url: URL): Promise<Response | null> {
   if (id && request.method === "POST") {
     const rows = await sql`SELECT rss_url FROM podcasts WHERE id = ${id}`;
     if (!rows[0]) throw new NotFoundError("Podcast");
-    return json(await importPodcast(sql, String(rows[0].rssUrl)));
+    return json(await importPodcast(sql, String(rows[0].rssUrl), config.MAX_JOB_ATTEMPTS));
   }
   id = routeId(pathname, /^\/api\/podcasts\/([^/]+)\/auto-processing$/);
   if (id && request.method === "PATCH") {
@@ -473,6 +474,17 @@ async function api(request: Request, url: URL): Promise<Response | null> {
       UPDATE podcasts SET auto_process_enabled = ${input.enabled}, updated_at = now()
       WHERE id = ${id}
       RETURNING id, auto_process_enabled
+    `;
+    if (!rows[0]) throw new NotFoundError("Podcast");
+    return json(rows[0]);
+  }
+  id = routeId(pathname, /^\/api\/podcasts\/([^/]+)\/auto-download$/);
+  if (id && request.method === "PATCH") {
+    const input = updatePodcastAutoDownloadSchema.parse(await readJson(request));
+    const rows = await sql`
+      UPDATE podcasts SET auto_download_enabled = ${input.enabled}, updated_at = now()
+      WHERE id = ${id}
+      RETURNING id, auto_download_enabled
     `;
     if (!rows[0]) throw new NotFoundError("Podcast");
     return json(rows[0]);
@@ -518,7 +530,7 @@ async function api(request: Request, url: URL): Promise<Response | null> {
     const activeStatuses = [
       ...episodeStatusesForFilter("queued"),
       ...episodeStatusesForFilter("processing"),
-    ];
+    ].filter((status) => status !== "downloaded");
     const [countRows, durationRows] = await Promise.all([
       sql`
         SELECT count(*)::int AS total_count,

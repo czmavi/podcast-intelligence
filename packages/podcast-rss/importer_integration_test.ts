@@ -50,11 +50,18 @@ Deno.test({
       const first = await importPodcast(sql, rssUrl);
       podcastId = first.podcastId;
       assertEquals(first.newEpisodes, 2);
+      assertEquals(
+        (await sql`SELECT id FROM jobs WHERE entity_id IN (
+        SELECT id FROM episodes WHERE podcast_id = ${podcastId}
+      )`).length,
+        0,
+      );
+      await sql`UPDATE podcasts SET auto_download_enabled = true WHERE id = ${podcastId}`;
       currentFeed = feed(
         [{ id: "b", title: "B updated" }, { id: "c", title: "C" }],
         "https://example.test/cover-after.jpg",
       );
-      const second = await importPodcast(sql, rssUrl);
+      const second = await importPodcast(sql, rssUrl, 4);
       assertEquals(second.missingEpisodes, 1);
       assertEquals(second.newEpisodes, 1);
       const podcast = await sql`SELECT image_url FROM podcasts WHERE id = ${first.podcastId}`;
@@ -76,8 +83,34 @@ Deno.test({
           { externalId: "c", title: "C", isPresentInFeed: true },
         ],
       );
+      await importPodcast(sql, rssUrl, 4);
+      const downloads = await sql`
+        SELECT episode.external_id, episode.processing_status, job.payload, job.max_attempts
+        FROM jobs job JOIN episodes episode ON episode.id = job.entity_id
+        WHERE episode.podcast_id = ${podcastId}
+      `;
+      assertEquals(downloads.length, 1);
+      assertEquals(downloads[0]?.externalId, "c");
+      assertEquals(downloads[0]?.processingStatus, "download_queued");
+      assertEquals(downloads[0]?.payload, { continuePipeline: false, source: "bulk_prefetch" });
+      assertEquals(downloads[0]?.maxAttempts, 4);
+      await sql`UPDATE podcasts SET auto_download_enabled = false WHERE id = ${podcastId}`;
+      currentFeed = feed([{ id: "d", title: "D" }], "https://example.test/cover.jpg");
+      await importPodcast(sql, rssUrl);
+      assertEquals(
+        (await sql`
+        SELECT processing_status FROM episodes
+        WHERE podcast_id = ${podcastId} AND external_id = 'd'
+      `)[0]?.processingStatus,
+        "imported",
+      );
     } finally {
-      if (podcastId) await sql`DELETE FROM podcasts WHERE id = ${podcastId}`;
+      if (podcastId) {
+        await sql`DELETE FROM jobs WHERE entity_id IN (
+          SELECT id FROM episodes WHERE podcast_id = ${podcastId}
+        )`;
+        await sql`DELETE FROM podcasts WHERE id = ${podcastId}`;
+      }
       await sql.end({ timeout: 5 });
       await server?.shutdown();
     }

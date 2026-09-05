@@ -23,7 +23,7 @@ async function fetchFeed(rssUrl: string): Promise<string> {
   }
 }
 
-export async function importPodcast(sql: Sql, rssUrl: string): Promise<{
+export async function importPodcast(sql: Sql, rssUrl: string, maxAttempts = 3): Promise<{
   podcastId: string;
   importedEpisodes: number;
   newEpisodes: number;
@@ -41,7 +41,7 @@ export async function importPodcast(sql: Sql, rssUrl: string): Promise<{
       SET name = EXCLUDED.name, website_url = EXCLUDED.website_url,
           description = EXCLUDED.description, image_url = EXCLUDED.image_url,
           last_imported_at = now(), updated_at = now()
-      RETURNING id
+      RETURNING id, auto_download_enabled
     `;
     const podcastId = String(podcastRows[0]?.id);
     const existingRows = await tx`
@@ -49,6 +49,7 @@ export async function importPodcast(sql: Sql, rssUrl: string): Promise<{
       FROM episodes
       WHERE podcast_id = ${podcastId}
     `;
+    const existingIds = new Set(existingRows.map((row) => String(row.externalId)));
     const changes = calculateFeedChanges(
       existingRows.map((row) => ({
         externalId: String(row.externalId),
@@ -64,7 +65,7 @@ export async function importPodcast(sql: Sql, rssUrl: string): Promise<{
       WHERE podcast_id = ${podcastId}
     `;
     for (const episode of parsed.episodes) {
-      await tx`
+      const inserted = await tx`
         INSERT INTO episodes (
           podcast_id, external_id, title, description, published_at, audio_url,
           source_url, duration_seconds, audio_mime_type, audio_byte_size,
@@ -85,7 +86,23 @@ export async function importPodcast(sql: Sql, rssUrl: string): Promise<{
             is_present_in_feed = true, last_seen_in_feed_at = now(),
             missing_from_feed_since = NULL,
             updated_at = now()
+        RETURNING id
       `;
+      if (podcastRows[0]?.autoDownloadEnabled && !existingIds.has(episode.externalId)) {
+        const episodeId = String(inserted[0]?.id);
+        // Reuse the prefetch queue: downloading alone must not start the ML pipeline.
+        await tx`
+          INSERT INTO jobs (type, entity_type, entity_id, payload, priority, max_attempts)
+          VALUES ('DOWNLOAD_AUDIO', 'episode', ${episodeId},
+            '{"continuePipeline":false,"source":"bulk_prefetch"}'::jsonb, -20, ${maxAttempts})
+          ON CONFLICT (type, entity_id) WHERE status IN ('queued', 'running') DO NOTHING
+        `;
+        await tx`
+          UPDATE episodes SET processing_status = 'download_queued', updated_at = now()
+          WHERE id = ${episodeId}
+        `;
+        existingIds.add(episode.externalId);
+      }
     }
     return {
       podcastId,

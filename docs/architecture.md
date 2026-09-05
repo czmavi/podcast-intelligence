@@ -76,6 +76,13 @@ Stejný worker periodicky plánuje také per-podcast denní obnovu RSS. Samostat
 nejstarší povolený feed, který nebyl úspěšně načten ani naplánován v posledních 24 hodinách, a vloží
 nízkoprioritní `IMPORT_FEED`. Handler používá stejný idempotentní import jako ruční aktualizace.
 
+Samostatná volba `auto_download_enabled` (výchozí vypnuto) při importu RSS atomicky zařadí pouze
+nově vložené epizody do download fronty s `continuePipeline=false` a `source=bulk_prefetch`. Zapnutí
+nestahuje historické ani znovu nalezené epizody. Pravidelnou kontrolu RSS nadále řídí
+`auto_refresh_enabled`; přepis řídí automatické zpracování. Nastavení ukládá
+`PATCH /api/podcasts/:id/auto-download` s JSON `{ "enabled": true }`. Počítadlo „ve frontě / běží“
+nezahrnuje epizody ve stavu `downloaded`.
+
 ## Processing runs a storage
 
 Každý ML běh má `processing_runs`. Epizoda ukazuje přes `active_processing_run_id` na jediný aktivní

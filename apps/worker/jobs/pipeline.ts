@@ -110,7 +110,7 @@ export function createHandlers(
       await progress({ phase: "rss_refresh", message: "Aktualizuji RSS feed.", percent: 0 });
       const rows = await sql`SELECT rss_url FROM podcasts WHERE id = ${job.entityId}`;
       if (!rows[0]) throw new Error("Podcast nebyl nalezen.");
-      const result = await importPodcast(sql, String(rows[0].rssUrl));
+      const result = await importPodcast(sql, String(rows[0].rssUrl), config.MAX_JOB_ATTEMPTS);
       await progress({ phase: "rss_refresh", message: "RSS feed je aktuální.", percent: 100 });
       return result;
     },
