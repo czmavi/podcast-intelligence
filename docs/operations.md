@@ -110,6 +110,43 @@ stažené epizody mají přednost. Výběr používá transakční advisory lock
 nevytvoří dvě úlohy. Epizody ve stavu `failed` se automaticky neopakují a epizoda mimo RSS bez
 uloženého audia se přeskočí.
 
+## Varianty přepisů a ElevenLabs Scribe
+
+Nový přepis čeká na ruční výběr varianty v detailu epizody. To platí i pro první přepis vytvořený
+autopilotem. Teprve volba „Použít pro přiřazení hlasů“ spustí identifikaci a indexaci. Dosavadní
+vybraný přepis zůstává během přípravy další varianty dostupný pro vyhledávání. Původní přepisy i
+jejich přiřazení osob se uchovávají; každá varianta může mít jiné hlasy a jiný počet mluvčích.
+
+Detail i seznam epizod ukazují použitý model a způsob zpracování. „Přegenerovat lokálně“ použije
+aktuální Whisper a nastavení diarizace podcastu. V detailu lze přes „Vytvořit / přegenerovat přepis“
+zvolit Scribe nebo lokální přepis s konkrétním režimem zarovnání. Porovnání zobrazí dvojici variant
+vedle sebe po 30sekundových úsecích podle začátku promluv; timestamp přehraje příslušné místo audia.
+Zvýraznění označuje jiný text nebo segmentaci, nikoli automatické hodnocení kvality.
+
+- `POST /api/episodes/:id/transcripts` přijímá `provider: local | elevenlabs` a volitelný
+  `transcriptAlignmentMode: segment | overlap | overlap_asr_corrected` (jen lokální přepis).
+- `GET /api/episodes/:id/transcripts` vrací dokončené varianty a počty hlasů a promluv.
+- `POST /api/episodes/:id/transcripts/select` přijímá `{ "runId": "UUID" }`; výběr cizího runu nebo
+  změna během běžící úlohy je odmítnuta.
+
+Pro Scribe nastavte `ELEVENLABS_API_KEY` ve webu a workeru, volitelně
+`ELEVENLABS_SCRIBE_MODEL=scribe_v2` a `ELEVENLABS_TIMEOUT_MS=1800000`. Compose a Synology Ansible
+tyto hodnoty přenášejí z `.env`. Bez klíče je volba nedostupná. Audio se odesílá do ElevenLabs a
+účtuje podle příslušného účtu. Scribe zpracuje uložené originální audio bez závislosti na Sparku;
+lokální varianta vyžaduje normalizované audio. Pipeline nepřechází na mock ani na jiný provider.
+
+Nový výchozí lokální model je `Cem13/whisper-large-v3-czech`, načítaný přes stávající
+Transformers/PyTorch backend. `WHISPER_MODEL` musí být aktualizovaný i v běžící audio-ML službě;
+změna zdrojů sama produkční model nepřepne. Při nasazení proveďte migraci 024 a aktualizujte web,
+worker i konfiguraci audio-ML na Sparku. První načtení nového modelu vyžaduje stažení vah.
+Existující výsledky zůstávají označené původním modelem.
+
+Kontrakty providerů:
+[ElevenLabs Scribe](https://elevenlabs.io/docs/api-reference/speech-to-text/convert) a
+[český Whisper](https://huggingface.co/Cem13/whisper-large-v3-czech).
+
+## Hromadné předstažení
+
 `POST /api/podcasts/:id/download-missing` hromadně zařadí `DOWNLOAD_AUDIO` pro epizody daného
 podcastu, které jsou stále v RSS, nejsou vyloučené z RAG a nemají uložené originální audio. Joby
 mají prioritu `-20` a payload `continuePipeline=false`, takže po úspěšném stažení nevytvoří

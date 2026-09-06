@@ -13,6 +13,9 @@ const envSchema = z.object({
   AUDIO_ML_SHARED_ROOT: z.string().min(1).default("/data"),
   AUDIO_ML_IDLE_TIMEOUT_MS: z.coerce.number().int().min(60_000).default(1_800_000),
   DEFAULT_TRANSCRIPTION_LANGUAGE: z.string().min(2).default("cs"),
+  ELEVENLABS_API_KEY: z.string().optional(),
+  ELEVENLABS_SCRIBE_MODEL: z.enum(["scribe_v1", "scribe_v2"]).default("scribe_v2"),
+  ELEVENLABS_TIMEOUT_MS: z.coerce.number().int().min(1000).max(7_200_000).default(1_800_000),
   TEXT_EMBEDDING_PROVIDER: z.enum(["local", "openai"]).default("local"),
   TEXT_EMBEDDING_MODEL: z.string().default(
     "BAAI/bge-m3",

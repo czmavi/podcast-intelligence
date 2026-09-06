@@ -1,6 +1,7 @@
 import type { AssignSpeakerInput } from "../domain/schemas.ts";
 import { DomainError, NotFoundError } from "../domain/errors.ts";
 import type { Sql } from "./client.ts";
+import { requireSelectedTranscript } from "./transcript-selection.ts";
 
 function normalizedName(value: string): string {
   return value.normalize("NFKD").replace(/\p{M}/gu, "").toLocaleLowerCase("cs").trim()
@@ -19,13 +20,14 @@ export async function assignSpeaker(
 ): Promise<SpeakerAssignmentResult> {
   return await sql.begin(async (tx) => {
     const cluster = (await tx`
-      SELECT cluster.id, cluster.episode_id, cluster.assigned_person_id, episode.podcast_id
+      SELECT cluster.id, cluster.episode_id, cluster.processing_run_id, cluster.assigned_person_id, episode.podcast_id
       FROM speaker_clusters cluster
       JOIN episodes episode ON episode.id = cluster.episode_id
       WHERE cluster.id = ${clusterId}
-      FOR UPDATE OF cluster
+      FOR UPDATE OF episode
     `)[0];
     if (!cluster) throw new NotFoundError("Speaker cluster");
+    await requireSelectedTranscript(tx, cluster.episodeId, cluster.processingRunId);
 
     const podcastRole =
       input.assignmentType === "moderator" || input.assignmentType === "newModerator"

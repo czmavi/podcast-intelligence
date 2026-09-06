@@ -1,6 +1,13 @@
 podcast_repo_root: "{{ inventory_dir | dirname | dirname | dirname }}"
 podcast_env_file: "{{ podcast_repo_root }}/.env"
 
+elevenlabs_api_key: >-
+  {{ lookup('ansible.builtin.ini', 'ELEVENLABS_API_KEY type=properties file=' ~ podcast_env_file) }}
+elevenlabs_scribe_model: >-
+  {{ lookup('ansible.builtin.ini', 'ELEVENLABS_SCRIBE_MODEL type=properties file=' ~ podcast_env_file) }}
+elevenlabs_timeout_ms: >-
+  {{ lookup('ansible.builtin.ini', 'ELEVENLABS_TIMEOUT_MS type=properties file=' ~ podcast_env_file) }}
+
 ansible_host: >-
   {{ lookup('ansible.builtin.ini', 'NAS_HOST type=properties file=' ~ podcast_env_file) }}
 ansible_user: >-

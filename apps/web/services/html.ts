@@ -127,12 +127,13 @@ export function podcastSettingsBody(podcast: Record<string, unknown>): string {
       <article class="card settings-card">
         <div class="settings-card-heading"><div><p class="eyebrow">Zpracování</p>
           <h2>Automatizace</h2></div></div>
-        <p>Jakmile je fronta volná, automatika postupně zařazuje nejnovější nezpracované epizody.</p>
+        <p>Jakmile je fronta volná, automatika postupně zařazuje nejnovější nezpracované epizody.
+          Po přepisu čeká na výběr varianty v detailu epizody.</p>
         ${
     settingsToggle(
       `/api/podcasts/${podcastId}/auto-processing`,
       "Automatické zpracování epizod",
-      "Nové a rozpracované epizody se postupně stáhnou, přepíšou a zaindexují.",
+      "Epizody se stáhnou a přepíšou. Přiřazení hlasů a indexace navážou po výběru přepisu.",
       automationEnabled,
     )
   }
@@ -176,7 +177,7 @@ export function layout(title: string, body: string): string {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${escapeHtml(title)} · Podcast Intelligence</title>
-  <link rel="stylesheet" href="/static/app.css?v=20260831.3">
+  <link rel="stylesheet" href="/static/app.css?v=20260906.1">
 </head>
 <body>
   <header class="site-header"><div class="nav-shell">
@@ -194,7 +195,7 @@ export function layout(title: string, body: string): string {
         <button value="confirm" data-confirmation-submit>Pokračovat</button></div>
     </form>
   </dialog>
-  <script type="module" src="/static/app.js?v=20260831.3"></script>
+  <script type="module" src="/static/app.js?v=20260906.1"></script>
 </body>
 </html>`;
 }

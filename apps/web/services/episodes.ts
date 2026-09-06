@@ -149,8 +149,8 @@ export interface EpisodeActionAppearance {
 
 export function episodeActionConfirmation(statusValue: unknown): string | null {
   return String(statusValue) === "ready"
-    ? "Epizoda je už hotová. Vytvoří se nový kompletní ML run; dosavadní výsledek zůstane " +
-      "uložený pro porovnání, ale ruční přiřazení hlasů se do nového runu nepřenese. Pokračovat?"
+    ? "Vytvoří se nová varianta přepisu. Původní přepis i přiřazení hlasů zůstanou uložené. " +
+      "Po dokončení vyberete, kterou variantu použít. Pokračovat?"
     : null;
 }
 

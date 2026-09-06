@@ -1,5 +1,6 @@
 import { NotFoundError } from "../domain/errors.ts";
 import type { Sql } from "./client.ts";
+import { requireSelectedTranscript } from "./transcript-selection.ts";
 
 export interface SpeakerIgnoreResult {
   clusterId: string;
@@ -13,12 +14,13 @@ export async function setSpeakerClusterIgnored(
 ): Promise<SpeakerIgnoreResult> {
   return await sql.begin(async (tx) => {
     const cluster = (await tx`
-      SELECT id, identity_status
-      FROM speaker_clusters
-      WHERE id = ${clusterId}
-      FOR UPDATE
+      SELECT cluster.id, cluster.identity_status, cluster.episode_id, cluster.processing_run_id
+      FROM speaker_clusters cluster JOIN episodes episode ON episode.id = cluster.episode_id
+      WHERE cluster.id = ${clusterId}
+      FOR UPDATE OF episode
     `)[0];
     if (!cluster) throw new NotFoundError("Speaker cluster");
+    await requireSelectedTranscript(tx, cluster.episodeId, cluster.processingRunId);
 
     if (ignored) {
       await tx`

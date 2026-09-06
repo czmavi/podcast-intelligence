@@ -1,5 +1,4 @@
 import type { Sql } from "./client.ts";
-import { JobRepository } from "./repositories/jobs.ts";
 import type { JobType } from "../domain/job-types.ts";
 import { DomainError, NotFoundError } from "../domain/errors.ts";
 import { transcriptAlignmentModeSchema } from "../domain/schemas.ts";
@@ -65,38 +64,55 @@ export async function scheduleEpisode(
   maxAttempts: number,
   mode: EpisodeProcessingMode = "resume",
 ): Promise<{ jobId: string; type: EpisodeSchedulingStep["type"] }> {
-  const rows = await sql`
+  return await sql.begin(async (tx) => {
+    const rows = await tx`
     SELECT episode.original_audio_path, episode.normalized_audio_path,
-      episode.active_processing_run_id, episode.rag_excluded, podcast.transcript_alignment_mode
+      episode.active_processing_run_id, episode.rag_excluded, episode.transcript_selection_pending,
+      podcast.transcript_alignment_mode
     FROM episodes episode
     JOIN podcasts podcast ON podcast.id = episode.podcast_id
     WHERE episode.id = ${episodeId}
+    FOR UPDATE OF episode
   `;
-  if (!rows[0]) throw new NotFoundError("Epizoda");
-  if (rows[0].ragExcluded === true) {
-    throw new DomainError(
-      "Epizoda je vyloučená z RAG. Před novým zpracováním ji znovu zahrňte.",
-      "EPISODE_RAG_EXCLUDED",
-      409,
-    );
-  }
-  const step = episodeSchedulingStep(rows[0] as unknown as EpisodeArtifacts, mode);
-  const jobs = new JobRepository(sql);
-  const payload = step.type === "PROCESS_AUDIO_ML"
-    ? {
-      ...(mode === "full" ? { force: true } : {}),
-      transcriptAlignmentMode: transcriptAlignmentModeSchema.parse(
-        rows[0].transcriptAlignmentMode,
-      ),
+    if (!rows[0]) throw new NotFoundError("Epizoda");
+    if (rows[0].transcriptSelectionPending && mode === "resume") {
+      throw new DomainError(
+        "Nejdříve vyberte přepis pro přiřazení hlasů.",
+        "TRANSCRIPT_SELECTION_REQUIRED",
+        409,
+      );
     }
-    : {};
-  const jobId = await jobs.enqueue(step.type, "episode", episodeId, payload, 0, maxAttempts);
-  await sql`
+    if (rows[0].ragExcluded === true) {
+      throw new DomainError(
+        "Epizoda je vyloučená z RAG. Před novým zpracováním ji znovu zahrňte.",
+        "EPISODE_RAG_EXCLUDED",
+        409,
+      );
+    }
+    const step = episodeSchedulingStep(rows[0] as unknown as EpisodeArtifacts, mode);
+    const active = await tx`SELECT id FROM jobs WHERE entity_type = 'episode'
+    AND entity_id = ${episodeId} AND status IN ('queued', 'running') LIMIT 1`;
+    if (active.length) throw new DomainError("Pro epizodu již běží úloha.", "EPISODE_BUSY", 409);
+    const payload = step.type === "PROCESS_AUDIO_ML"
+      ? {
+        ...(mode === "full" ? { force: true } : {}),
+        transcriptAlignmentMode: transcriptAlignmentModeSchema.parse(
+          rows[0].transcriptAlignmentMode,
+        ),
+      }
+      : {};
+    const inserted = await tx`INSERT INTO jobs (type, entity_type, entity_id, payload, max_attempts)
+    VALUES (${step.type}, 'episode', ${episodeId}, ${
+      tx.json(payload)
+    }, ${maxAttempts}) RETURNING id`;
+    const jobId = String(inserted[0]?.id);
+    await tx`
     UPDATE episodes SET processing_status = ${step.status}, processing_error = NULL,
       updated_at = now()
     WHERE id = ${episodeId}
   `;
-  return { jobId, type: step.type };
+    return { jobId, type: step.type };
+  });
 }
 
 export async function scheduleMissingPodcastDownloads(
@@ -188,6 +204,7 @@ export async function scheduleNextAutoProcessEpisode(
       FROM episodes episode
       JOIN podcasts podcast ON podcast.id = episode.podcast_id
       WHERE podcast.auto_process_enabled
+        AND NOT episode.transcript_selection_pending
         AND NOT episode.rag_excluded
         AND episode.processing_status NOT IN ('ready', 'failed')
         AND (episode.is_present_in_feed OR episode.original_audio_path IS NOT NULL)

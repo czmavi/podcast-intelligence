@@ -86,7 +86,26 @@ nezahrnuje epizody ve stavu `downloaded`.
 ## Processing runs a storage
 
 Každý ML běh má `processing_runs`. Epizoda ukazuje přes `active_processing_run_id` na jediný aktivní
-výsledek, takže se nemíchají modelové verze. Cesta je vždy sestavena serverem:
+výsledek, takže se nemíchají modelové verze.
+
+Nové výsledky lokálního Whisperu i ElevenLabs Scribe se ukládají jako kandidátní varianty. Každá má
+vlastní promluvy, diarizační clustery a počet hlasů. Uložení výsledku nastaví
+`transcript_selection_pending`, ponechá dosavadní aktivní run a zastaví pipeline před identifikací
+osob. Autopilot tyto epizody přeskakuje a může připravovat další. Ruční výběr dokončeného runu
+atomicky změní aktivní variantu a zařadí `IDENTIFY_SPEAKERS`; potom pokračuje indexace. Výběr je
+povolen jen bez aktivních úloh epizody. Přiřazování osob a úpravy hlasů vyžadují vybranou variantu.
+Historické přiřazení zůstává ve vlastním runu, automaticky se mezi variantami nekopíruje.
+Vyhledávání stále používá pouze aktivní run; během přípravy kandidáta zůstává dostupný předchozí.
+
+Scribe volá worker přímo z TypeScriptu streamovaným multipart uploadem uloženého originálního audia.
+Zod validuje odpověď včetně časů a nativních speaker ID. Žádný počet mluvčích se nevynucuje. Scribe
+vrací vlastní diarizaci, ale neposkytuje WeSpeaker embeddingy; jeho hlasy lze přiřadit poslechem,
+nemohou tvořit hlasové reference pro lokální matching. JSON odpověď je checkpointovaný pod ID jobu a
+ukládání runu je idempotentní přes `source_job_id`. Cloudový job má jeden automatický pokus; při
+nejasném výsledku přerušeného HTTP požadavku nelze zaručit, že služba požadavek nezúčtovala.
+Opakování po uložené odpovědi už další požadavek neposílá.
+
+Cesta k souborům je vždy sestavena serverem:
 
 ```text
 storage/podcasts/{podcastId}/episodes/{episodeId}/

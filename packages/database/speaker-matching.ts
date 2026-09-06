@@ -87,13 +87,13 @@ async function matchRegularHostsForEpisode(
 ): Promise<SpeakerMatchSuggestion[]> {
   return await sql.begin(async (tx) => {
     const episodeRows = await tx`
-      SELECT id, podcast_id, active_processing_run_id
+      SELECT id, podcast_id, active_processing_run_id, transcript_selection_pending
       FROM episodes WHERE id = ${episodeId}
       FOR UPDATE
     `;
     const episode = episodeRows[0];
     if (!episode) throw new NotFoundError("Epizoda");
-    if (!episode.activeProcessingRunId) {
+    if (!episode.activeProcessingRunId || episode.transcriptSelectionPending) {
       throw new DomainError(
         "Epizoda zatím nemá dokončenou diarizaci.",
         "SPEAKERS_NOT_AVAILABLE",

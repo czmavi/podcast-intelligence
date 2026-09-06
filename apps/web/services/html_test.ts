@@ -31,8 +31,8 @@ Deno.test("layout obsahuje sdílený potvrzovací dialog", () => {
   const output = layout("Test", "<p>Obsah</p>");
   assertStringIncludes(output, 'id="confirmation-dialog"');
   assertStringIncludes(output, "Potvrdit akci");
-  assertStringIncludes(output, "/static/app.css?v=20260831.3");
-  assertStringIncludes(output, "/static/app.js?v=20260831.3");
+  assertStringIncludes(output, "/static/app.css?v=20260906.1");
+  assertStringIncludes(output, "/static/app.js?v=20260906.1");
 });
 
 Deno.test("detail podcastu odkazuje na samostatné nastavení", () => {

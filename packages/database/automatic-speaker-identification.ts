@@ -38,6 +38,7 @@ export async function enqueueGuestIdentificationAfterSpeakerAssignment(
       AND moderator.person_id = assigned_cluster.assigned_person_id
       AND moderator.role = 'moderator'
     WHERE assigned_cluster.id = ${clusterId}
+      AND NOT episode.transcript_selection_pending
       AND assigned_cluster.identity_status = 'verified'
       AND (
         SELECT count(*)
@@ -84,6 +85,7 @@ export async function singleUnknownSpeakerContext(
       ON cluster.episode_id = episode.id
       AND cluster.processing_run_id = episode.active_processing_run_id
     WHERE episode.id = ${episodeId}
+      AND NOT episode.transcript_selection_pending
     GROUP BY episode.id
   `;
   const row = rows[0];
@@ -111,10 +113,11 @@ export async function assignSingleUnknownGuest(
         ON episode.id = cluster.episode_id
         AND episode.active_processing_run_id = cluster.processing_run_id
       WHERE cluster.episode_id = ${context.episodeId}
+        AND NOT episode.transcript_selection_pending
         AND cluster.assigned_person_id IS NULL
         AND cluster.identity_status = 'unknown'
       ORDER BY cluster.local_label
-      FOR UPDATE OF cluster
+      FOR UPDATE OF episode
     `;
     if (
       unknownClusters.length !== 1 ||

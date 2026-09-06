@@ -26,11 +26,8 @@ Deno.test("doplňková identifikace hosta znovu nespustí indexaci", () => {
   );
 });
 
-Deno.test("identifikace mluvčích proběhne mezi Audio ML a chunkingem", () => {
-  assertEquals(nextPipelineStep({ type: "PROCESS_AUDIO_ML", payload: {} }), {
-    type: "IDENTIFY_SPEAKERS",
-    status: "speaker_identification_pending",
-  });
+Deno.test("přepis čeká na výběr před identifikací mluvčích a chunkingem", () => {
+  assertEquals(nextPipelineStep({ type: "PROCESS_AUDIO_ML", payload: {} }), null);
   assertEquals(nextPipelineStep({ type: "IDENTIFY_SPEAKERS", payload: {} }), {
     type: "CREATE_CONTENT_CHUNKS",
     status: "indexing_queued",

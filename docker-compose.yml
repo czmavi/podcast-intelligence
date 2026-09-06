@@ -25,6 +25,9 @@ services:
     environment: &deno-env
       DATABASE_URL: postgres://podcast:podcast@postgres:5432/podcast
       STORAGE_ROOT: /data
+      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
+      ELEVENLABS_SCRIBE_MODEL: ${ELEVENLABS_SCRIBE_MODEL:-scribe_v2}
+      ELEVENLABS_TIMEOUT_MS: ${ELEVENLABS_TIMEOUT_MS:-1800000}
       AUDIO_ML_URL: ${AUDIO_ML_URL:-http://audio-ml:8001}
       AUDIO_ML_API_TOKEN: ${AUDIO_ML_API_TOKEN:-}
       AUDIO_ML_SHARED_ROOT: /data
@@ -109,7 +112,7 @@ services:
       AUDIO_ML_SHARED_ROOT: /data
       AUDIO_ML_API_TOKEN: ${AUDIO_ML_API_TOKEN:-}
       HF_TOKEN: ${HF_TOKEN:-}
-      WHISPER_MODEL: ${WHISPER_MODEL:-openai/whisper-large-v3}
+      WHISPER_MODEL: ${WHISPER_MODEL:-Cem13/whisper-large-v3-czech}
       DIARIZATION_MODEL: ${DIARIZATION_MODEL:-pyannote/speaker-diarization-community-1}
       SPEAKER_EMBEDDING_MODEL: ${SPEAKER_EMBEDDING_MODEL:-pyannote/wespeaker-voxceleb-resnet34-LM}
       TEXT_EMBEDDING_MODEL: ${TEXT_EMBEDDING_MODEL:-BAAI/bge-m3}

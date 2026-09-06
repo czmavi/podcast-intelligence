@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     audio_ml_shared_root: Path = Path("/data")
     audio_ml_api_token: str | None = Field(default=None, min_length=32)
     hf_token: str | None = None
-    whisper_model: str = "openai/whisper-large-v3"
+    whisper_model: str = "Cem13/whisper-large-v3-czech"
     warm_transcription_model: bool = False
     warm_diarization_model: bool = False
     warm_speaker_embedding_model: bool = False

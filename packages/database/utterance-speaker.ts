@@ -1,6 +1,7 @@
 import type { UpdateUtteranceSpeakerInput } from "../domain/schemas.ts";
 import { NotFoundError } from "../domain/errors.ts";
 import type { Sql } from "./client.ts";
+import { requireSelectedTranscript } from "./transcript-selection.ts";
 
 export interface UtteranceSpeakerUpdateResult {
   utteranceId: string;
@@ -15,15 +16,16 @@ export async function updateUtteranceSpeaker(
 ): Promise<UtteranceSpeakerUpdateResult> {
   return await sql.begin(async (tx) => {
     const utterance = (await tx`
-      SELECT utterance.id, utterance.episode_id, episode.podcast_id,
+      SELECT utterance.id, utterance.episode_id, utterance.processing_run_id, episode.podcast_id,
         cluster.assigned_person_id
       FROM utterances utterance
       JOIN speaker_clusters cluster ON cluster.id = utterance.speaker_cluster_id
       JOIN episodes episode ON episode.id = utterance.episode_id
       WHERE utterance.id = ${utteranceId}
-      FOR UPDATE OF utterance
+      FOR UPDATE OF episode
     `)[0];
     if (!utterance) throw new NotFoundError("Promluva");
+    await requireSelectedTranscript(tx, utterance.episodeId, utterance.processingRunId);
 
     const source = input.speaker === "cluster" ? "cluster" : "manual";
     let personId: string | null = null;

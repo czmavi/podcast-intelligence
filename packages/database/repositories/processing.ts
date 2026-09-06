@@ -11,19 +11,26 @@ export async function saveProcessingResult(
   result: ProcessAudioResponse,
   transcriptPath: string,
   sourceJobId: string,
+  options: { candidate?: boolean; provider?: "local" | "elevenlabs" } = {},
 ): Promise<string> {
   return await sql.begin(async (tx) => {
+    await tx`SELECT id FROM episodes WHERE id = ${result.episodeId} FOR UPDATE`;
+    const existing = (await tx`
+      SELECT id FROM processing_runs WHERE source_job_id = ${sourceJobId}
+    `)[0];
+    if (existing) return String(existing.id);
     const runRows = await tx`
       INSERT INTO processing_runs (
         episode_id, status, pipeline_version, transcription_model,
         diarization_model, speaker_embedding_model, source_job_id,
-        transcript_alignment_mode, asr_correction_metadata
+        transcript_alignment_mode, asr_correction_metadata, transcription_provider
       ) VALUES (
         ${result.episodeId}, 'running', ${result.schemaVersion},
         ${result.models.transcription.name}, ${result.models.diarization?.name ?? null},
         ${result.models.speakerEmbedding?.name ?? null}, ${sourceJobId},
         ${result.transcriptAlignmentMode},
-        ${result.asrCorrection ? tx.json(result.asrCorrection) : null}
+        ${result.asrCorrection ? tx.json(result.asrCorrection) : null},
+        ${options.provider ?? "local"}
       )
       RETURNING id
     `;
@@ -106,7 +113,10 @@ export async function saveProcessingResult(
     `;
     await tx`
       UPDATE episodes
-      SET active_processing_run_id = ${runId}, processing_status = 'transcribed',
+      SET active_processing_run_id = CASE WHEN ${options.candidate === true}
+            THEN active_processing_run_id ELSE ${runId}::uuid END,
+          transcript_selection_pending = ${options.candidate === true},
+          processing_status = 'transcribed',
           duration_seconds = ${result.durationSeconds}, processing_error = NULL, updated_at = now()
       WHERE id = ${result.episodeId}
     `;

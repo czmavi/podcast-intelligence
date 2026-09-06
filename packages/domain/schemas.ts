@@ -32,6 +32,13 @@ export const updatePodcastTranscriptAlignmentSchema = z.object({
 
 export type TranscriptAlignmentMode = z.infer<typeof transcriptAlignmentModeSchema>;
 
+export const createTranscriptSchema = z.object({
+  provider: z.enum(["local", "elevenlabs"]),
+  transcriptAlignmentMode: transcriptAlignmentModeSchema.default("segment"),
+});
+export type CreateTranscriptInput = z.infer<typeof createTranscriptSchema>;
+export const selectTranscriptSchema = z.object({ runId: uuidSchema });
+
 export const updateEpisodeRagExclusionSchema = z.object({
   excluded: z.boolean(),
 });

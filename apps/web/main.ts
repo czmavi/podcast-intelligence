@@ -1,6 +1,18 @@
 import { dirname, fromFileUrl, isAbsolute, join, relative, resolve } from "@std/path";
 import { z, ZodError } from "zod";
 import { createDatabase } from "../../packages/database/client.ts";
+import {
+  listTranscripts,
+  scheduleTranscript,
+  selectTranscript,
+} from "../../packages/database/transcripts.ts";
+import { requireSelectedTranscript } from "../../packages/database/transcript-selection.ts";
+import {
+  transcriptComparison,
+  transcriptLabel,
+  transcriptSelectionButton,
+  transcriptVariantsSection,
+} from "./services/transcripts.ts";
 import { SystemIncidentRepository } from "../../packages/database/repositories/system-incidents.ts";
 import {
   scheduleEpisode,
@@ -17,8 +29,10 @@ import {
   assignSpeakerSchema,
   createPersonSchema,
   createPodcastSchema,
+  createTranscriptSchema,
   processEpisodeSchema,
   searchSchema,
+  selectTranscriptSchema,
   updateEpisodeRagExclusionSchema,
   updatePodcastAutoDownloadSchema,
   updatePodcastAutoProcessingSchema,
@@ -541,7 +555,7 @@ async function api(request: Request, url: URL): Promise<Response | null> {
           )::int AS remaining_count,
           count(*) FILTER (WHERE processing_status = 'failed')::int AS failed_count,
           count(*) FILTER (
-            WHERE processing_status::text = ANY(${activeStatuses})
+            WHERE processing_status::text = ANY(${activeStatuses}) AND NOT transcript_selection_pending
           )::int AS in_progress_count,
           count(*) FILTER (
             WHERE processing_status NOT IN ('ready', 'failed')
@@ -608,6 +622,20 @@ async function api(request: Request, url: URL): Promise<Response | null> {
   if (id && request.method === "POST") {
     const input = processEpisodeSchema.parse(await readJson(request));
     return json(await scheduleEpisode(sql, id, config.MAX_JOB_ATTEMPTS, input.mode), 202);
+  }
+  id = routeId(pathname, /^\/api\/episodes\/([^/]+)\/transcripts$/);
+  if (id && request.method === "POST") {
+    const input = createTranscriptSchema.parse(await readJson(request));
+    if (input.provider === "elevenlabs" && !config.ELEVENLABS_API_KEY) {
+      throw new DomainError("ElevenLabs zatím není nakonfigurovaný.", "SCRIBE_NOT_CONFIGURED", 409);
+    }
+    return json(await scheduleTranscript(sql, id, input, config.MAX_JOB_ATTEMPTS), 202);
+  }
+  if (id && request.method === "GET") return json(await listTranscripts(sql, id));
+  id = routeId(pathname, /^\/api\/episodes\/([^/]+)\/transcripts\/select$/);
+  if (id && request.method === "POST") {
+    const input = selectTranscriptSchema.parse(await readJson(request));
+    return json(await selectTranscript(sql, id, input.runId, config.MAX_JOB_ATTEMPTS), 202);
   }
   id = routeId(pathname, /^\/api\/episodes\/([^/]+)\/rag-exclusion$/);
   if (id && request.method === "PATCH") {
@@ -748,14 +776,18 @@ async function api(request: Request, url: URL): Promise<Response | null> {
   }
   id = routeId(pathname, /^\/api\/speaker-clusters\/([^/]+)\/reject$/);
   if (id && request.method === "POST") {
-    const rows = await sql`
-      UPDATE speaker_clusters SET assigned_person_id = NULL, identity_status = 'rejected',
+    const clusterId = id;
+    await sql.begin(async (tx) => {
+      const cluster = (await tx`SELECT episode_id, processing_run_id FROM speaker_clusters
+        WHERE id = ${clusterId}`)[0];
+      if (!cluster) throw new NotFoundError("Speaker cluster");
+      await requireSelectedTranscript(tx, cluster.episodeId, cluster.processingRunId);
+      await tx`UPDATE speaker_clusters SET assigned_person_id = NULL, identity_status = 'rejected',
         identity_confidence = NULL, identity_source = 'manual', updated_at = now()
-      WHERE id = ${id} RETURNING id
-    `;
-    if (!rows[0]) throw new NotFoundError("Speaker cluster");
-    await sql`UPDATE utterances SET person_id = NULL WHERE speaker_cluster_id = ${id}
-      AND speaker_assignment_source = 'cluster'`;
+        WHERE id = ${clusterId}`;
+      await tx`UPDATE utterances SET person_id = NULL WHERE speaker_cluster_id = ${clusterId}
+        AND speaker_assignment_source = 'cluster'`;
+    });
     return json({ ok: true });
   }
   id = routeId(pathname, /^\/api\/speaker-clusters\/([^/]+)\/ignore$/);
@@ -999,8 +1031,16 @@ async function pages(url: URL): Promise<Response> {
     const episodes = selectedFilter
       ? await sql`SELECT episode.*,
           COALESCE(speakers.total, 0)::int AS speaker_count,
-          COALESCE(speakers.verified, 0)::int AS verified_speaker_count
+          COALESCE(speakers.verified, 0)::int AS verified_speaker_count,
+          processed.transcription_provider, processed.transcription_model,
+          processed.diarization_model, processed.transcript_alignment_mode
           FROM episodes episode
+          LEFT JOIN LATERAL (
+            SELECT run.transcription_provider, run.transcription_model, run.diarization_model, run.transcript_alignment_mode
+            FROM processing_runs run WHERE run.episode_id = episode.id AND run.status = 'completed'
+            ORDER BY (run.id = episode.active_processing_run_id) DESC NULLS LAST, run.started_at DESC
+            LIMIT 1
+          ) processed ON true
           LEFT JOIN LATERAL (
             SELECT count(*) FILTER (
                 WHERE cluster.identity_status <> 'ignored'
@@ -1017,8 +1057,16 @@ async function pages(url: URL): Promise<Response> {
           ORDER BY published_at DESC NULLS LAST`
       : await sql`SELECT episode.*,
           COALESCE(speakers.total, 0)::int AS speaker_count,
-          COALESCE(speakers.verified, 0)::int AS verified_speaker_count
+          COALESCE(speakers.verified, 0)::int AS verified_speaker_count,
+          processed.transcription_provider, processed.transcription_model,
+          processed.diarization_model, processed.transcript_alignment_mode
           FROM episodes episode
+          LEFT JOIN LATERAL (
+            SELECT run.transcription_provider, run.transcription_model, run.diarization_model, run.transcript_alignment_mode
+            FROM processing_runs run WHERE run.episode_id = episode.id AND run.status = 'completed'
+            ORDER BY (run.id = episode.active_processing_run_id) DESC NULLS LAST, run.started_at DESC
+            LIMIT 1
+          ) processed ON true
           LEFT JOIN LATERAL (
             SELECT count(*) FILTER (
                 WHERE cluster.identity_status <> 'ignored'
@@ -1049,7 +1097,18 @@ async function pages(url: URL): Promise<Response> {
       <p class="episode-description">${
         escapeHtml(htmlToPlainText(episode.description) ?? "Popis není k dispozici.")
       }</p>
-      <p class="meta">Interní stav: ${escapeHtml(episode.processingStatus)}</p>
+      <p class="meta">${
+        episode.transcriptionModel
+          ? `Přepis: ${escapeHtml(transcriptLabel(episode))} · Diarizace: ${
+            escapeHtml(episode.diarizationModel ?? "bez diarizace")
+          }`
+          : "Přepis zatím nebyl vytvořen."
+      }</p>
+      ${
+        episode.transcriptSelectionPending
+          ? `<a class="button secondary" href="/episodes/${episode.id}">Vybrat přepis a přiřadit hlasy</a>`
+          : ""
+      }
       ${feedMissingWarning(episode)}
       ${
         episode.processingError
@@ -1058,9 +1117,11 @@ async function pages(url: URL): Promise<Response> {
       }
       <button${action.className ? ` class="${action.className}"` : ""}
         data-action="/api/episodes/${episode.id}/process" data-loading-label="Zařazuji…"
-        ${episode.activeProcessingRunId ? `data-body='{"mode":"full"}'` : ""}
+        ${episode.transcriptionModel ? `data-body='{"mode":"full"}'` : ""}
         ${confirmation ? `data-confirm="${escapeHtml(confirmation)}"` : ""}
-        ${canProcess ? "" : "disabled"}>${action.label}</button>
+        ${canProcess ? "" : "disabled"}>${
+        episode.transcriptionModel ? "Přegenerovat lokálně" : action.label
+      }</button>
       ${
         canProcess
           ? ""
@@ -1113,6 +1174,71 @@ async function pages(url: URL): Promise<Response> {
       }</section>`,
     ));
   }
+  const comparisonEpisodeId = routeId(url.pathname, /^\/episodes\/([^/]+)\/transcripts$/);
+  if (comparisonEpisodeId) {
+    const episode = (await sql`SELECT * FROM episodes WHERE id = ${comparisonEpisodeId}`)[0];
+    if (!episode) throw new NotFoundError("Epizoda");
+    const runs = await listTranscripts(sql, comparisonEpisodeId);
+    const leftId = url.searchParams.has("left")
+      ? uuidSchema.parse(url.searchParams.get("left"))
+      : runs[0]?.id;
+    const rightId = url.searchParams.has("right")
+      ? uuidSchema.parse(url.searchParams.get("right"))
+      : runs.find((run) => run.id !== leftId)?.id;
+    const left = runs.find((run) => run.id === leftId);
+    const right = runs.find((run) => run.id === rightId);
+    if (!left || (rightId && !right)) throw new NotFoundError("Přepis této epizody");
+    const rows = await sql`SELECT utterance.*, cluster.local_label
+      FROM utterances utterance JOIN speaker_clusters cluster ON cluster.id = utterance.speaker_cluster_id
+      WHERE utterance.episode_id = ${comparisonEpisodeId}
+        AND utterance.processing_run_id IN (${left.id}, ${right?.id ?? left.id})
+      ORDER BY utterance.sequence_number`;
+    const options = (selected: unknown) =>
+      runs.map((run) =>
+        `<option value="${run.id}"${run.id === selected ? " selected" : ""}>${
+          escapeHtml(transcriptLabel(run))
+        } · ${Number(run.speakerCount)} hlasů · ${
+          escapeHtml(new Date(String(run.startedAt)).toLocaleString("cs"))
+        }</option>`
+      ).join("");
+    return html(
+      layout(
+        "Porovnání přepisů",
+        `<a class="back-link" href="/episodes/${comparisonEpisodeId}">← Zpět na epizodu a přiřazení hlasů</a>
+      <h1>Porovnání přepisů</h1><p>${escapeHtml(episode.title)}</p>
+      <p>Úseky jsou zarovnané po 30 sekundách podle začátku promluvy. Zvýraznění označuje rozdílný text nebo členění. Označení hlasů platí vždy jen uvnitř daného přepisu.</p>
+      <form method="GET" class="transcript-comparison-columns"><label>Levý přepis<select name="left">${
+          options(left.id)
+        }</select></label>
+        <label>Pravý přepis<select name="right">${
+          options(right?.id ?? left.id)
+        }</select></label><button type="submit">Porovnat</button></form>
+      ${
+          episode.originalAudioPath
+            ? `<audio controls preload="metadata" src="/api/episodes/${comparisonEpisodeId}/audio"></audio>`
+            : ""
+        }
+      <div class="transcript-comparison-columns"><div><h2>${
+          escapeHtml(transcriptLabel(left))
+        }</h2><p>${Number(left.speakerCount)} mluvčích</p>${
+          transcriptSelectionButton(comparisonEpisodeId, left, episode)
+        }</div>
+        <div>${
+          right
+            ? `<h2>${escapeHtml(transcriptLabel(right))}</h2><p>${
+              Number(right.speakerCount)
+            } mluvčích</p>${transcriptSelectionButton(comparisonEpisodeId, right, episode)}`
+            : "<p>Další přepis zatím není k dispozici.</p>"
+        }</div></div>
+      ${
+          transcriptComparison(
+            rows.filter((row) => row.processingRunId === left.id),
+            rows.filter((row) => row.processingRunId === right?.id),
+          )
+        }`,
+      ),
+    );
+  }
   const episodeId = routeId(url.pathname, /^\/episodes\/([^/]+)$/);
   if (episodeId) {
     const episode = (await sql`
@@ -1128,13 +1254,15 @@ async function pages(url: URL): Promise<Response> {
       chunks,
       artifacts,
       nextSpeakerEpisodes,
+      transcriptRuns,
     ] = await Promise.all([
       sql`SELECT person.*, association.role AS podcast_role
         FROM podcast_persons association
         JOIN persons person ON person.id = association.person_id
         WHERE association.podcast_id = ${episode.podcastId}
         ORDER BY association.role, person.display_name`,
-      sql`SELECT cluster.*, person.display_name, association.role AS podcast_role
+      sql`SELECT cluster.*, person.display_name, association.role AS podcast_role,
+          EXISTS (SELECT 1 FROM speaker_embeddings WHERE speaker_cluster_id = cluster.id) AS has_voice_embedding
         FROM speaker_clusters cluster
         LEFT JOIN persons person ON person.id = cluster.assigned_person_id
         LEFT JOIN podcast_persons association
@@ -1161,15 +1289,16 @@ async function pages(url: URL): Promise<Response> {
         WHERE candidate.podcast_id = ${episode.podcastId}
           AND candidate.id <> ${episodeId}
           AND NOT candidate.rag_excluded
-          AND EXISTS (
+          AND (candidate.transcript_selection_pending OR EXISTS (
             SELECT 1
             FROM speaker_clusters cluster
             WHERE cluster.episode_id = candidate.id
               AND cluster.processing_run_id = candidate.active_processing_run_id
               AND cluster.identity_status NOT IN ('verified', 'ignored')
-          )
+          ))
         ORDER BY candidate.published_at DESC NULLS LAST, candidate.created_at DESC, candidate.id DESC
         LIMIT 1`,
+      listTranscripts(sql, episodeId),
     ]);
     const personOptions = (
       availablePeople: Record<string, unknown>[],
@@ -1318,8 +1447,14 @@ async function pages(url: URL): Promise<Response> {
         <div class="checkbox-row">
           <label class="checkbox-field"><input type="checkbox" name="verified" checked>
             <span>Ověřeno</span></label>
-          <label class="checkbox-field"><input type="checkbox" name="createReferenceEmbeddings" checked>
-            <span>Uložit hlasovou referenci</span></label>
+          <label class="checkbox-field"><input type="checkbox" name="createReferenceEmbeddings"${
+        cluster.hasVoiceEmbedding ? " checked" : " disabled"
+      }>
+            <span>${
+        cluster.hasVoiceEmbedding
+          ? "Uložit hlasovou referenci"
+          : "Hlasová reference není pro tuto variantu dostupná"
+      }</span></label>
           <label class="checkbox-field"><input type="checkbox" name="overwrite"${
         cluster.assignedPersonId ? " checked" : ""
       }>
@@ -1364,13 +1499,13 @@ async function pages(url: URL): Promise<Response> {
           episodeAction.className ? ` class="${episodeAction.className}"` : ""
         }
         data-action="/api/episodes/${episodeId}/process" data-loading-label="Zařazuji…"
-        ${episode.activeProcessingRunId ? `data-body='{"mode":"full"}'` : ""}
+        ${transcriptRuns.length ? `data-body='{"mode":"full"}'` : ""}
         ${episodeConfirmation ? `data-confirm="${escapeHtml(episodeConfirmation)}"` : ""}
         ${
           episode.ragExcluded || (episode.isPresentInFeed === false && !episode.originalAudioPath)
             ? "disabled"
             : ""
-        }>${episodeAction.label}</button>
+        }>${transcriptRuns.length ? "Přegenerovat lokálně" : episodeAction.label}</button>
       ${episodeRagExclusionControl(episodeId, episode.ragExcluded)}</div>
       </section>
       ${
@@ -1378,9 +1513,11 @@ async function pages(url: URL): Promise<Response> {
             ? `<audio controls preload="metadata" src="/api/episodes/${episodeId}/audio"></audio>`
             : "<p>Audio zatím není stažené.</p>"
         }
+      ${transcriptVariantsSection(episode, transcriptRuns, Boolean(config.ELEVENLABS_API_KEY))}
       <section><h2>Mluvčí</h2>
       ${
-          identifiableClusters.length > 0 && assignedSpeakerCount === 0
+          !episode.transcriptSelectionPending && identifiableClusters.length > 0 &&
+            assignedSpeakerCount === 0 && clusters.some((cluster) => cluster.hasVoiceEmbedding)
             ? `<div class="card"><p><strong>Automatické přiřazení nenašlo jistou shodu.</strong>
             Hlasy můžete znovu porovnat s ověřenými referencemi stálých moderátorů podcastu.
             Výsledky se pouze navrhnou a musíte je ručně potvrdit.</p>
@@ -1390,10 +1527,16 @@ async function pages(url: URL): Promise<Response> {
             ? `<div class="alert alert-info">Čeká na ruční potvrzení: ${suggestedSpeakerCount}.</div>`
             : ""
         }
-      ${speakerCards || "<p>Čeká na diarizaci.</p>"}
+      ${
+          episode.transcriptSelectionPending
+            ? "<p>Nejdříve vyberte variantu přepisu výše.</p>"
+            : speakerCards || "<p>Čeká na diarizaci.</p>"
+        }
       ${nextSpeakerAssignmentEpisodeLink(nextSpeakerEpisodes[0]?.id)}</section>
       <section><h2>Přepis</h2>${
-          utterances.map((utterance) => transcriptLine(utterance, people)).join("") ||
+          (episode.transcriptSelectionPending
+            ? "<p>Přepisy jsou dostupné v porovnání variant výše.</p>"
+            : utterances.map((utterance) => transcriptLine(utterance, people)).join("")) ||
           "<p>Přepis zatím není dostupný.</p>"
         }</section>
       <section><h2>Obsahové chunky</h2>${

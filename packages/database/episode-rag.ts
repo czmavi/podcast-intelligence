@@ -53,7 +53,8 @@ export async function updateEpisodeRagExclusion(
         );
       }
       await tx`
-        UPDATE episodes SET rag_excluded = true, processing_error = NULL, updated_at = now()
+        UPDATE episodes SET rag_excluded = true, processing_error = NULL,
+          transcript_selection_pending = false, updated_at = now()
         WHERE id = ${episodeId}
       `;
       await tx`DELETE FROM claims WHERE episode_id = ${episodeId}`;

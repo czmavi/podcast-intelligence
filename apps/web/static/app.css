@@ -1704,3 +1704,49 @@ td small {
     width: 100%;
   }
 }
+/* Transcript variants keep provider-specific speaker labels in separate columns. */
+.transcript-variant-list {
+  display: grid;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.transcript-variant {
+  border-bottom: 1px solid #d8dee8;
+  padding-bottom: 1rem;
+}
+
+.transcript-comparison-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 1.5rem;
+}
+
+.transcript-comparison-columns > * {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.transcript-comparison-columns select {
+  width: 100%;
+}
+
+.transcript-comparison-row {
+  padding: 1rem;
+  border-bottom: 1px solid #d8dee8;
+}
+
+.transcript-different {
+  background: #fff8e8;
+}
+
+.transcript-variants summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+@media (max-width: 640px) {
+  .transcript-comparison-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

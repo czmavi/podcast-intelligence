@@ -12,11 +12,12 @@ export function shouldContinuePipeline(job: Pick<Job, "type" | "payload">): bool
 export function nextPipelineStep(
   job: Pick<Job, "type" | "payload">,
 ): NextPipelineStep | null {
+  // A transcript must be selected before identifying people or indexing it.
+  if (job.type === "PROCESS_AUDIO_ML") return null;
   if (!shouldContinuePipeline(job)) return null;
   const next: Partial<Record<JobType, NextPipelineStep>> = {
     DOWNLOAD_AUDIO: { type: "NORMALIZE_AUDIO", status: "normalization_queued" },
     NORMALIZE_AUDIO: { type: "PROCESS_AUDIO_ML", status: "transcription_queued" },
-    PROCESS_AUDIO_ML: { type: "IDENTIFY_SPEAKERS", status: "speaker_identification_pending" },
     IDENTIFY_SPEAKERS: { type: "CREATE_CONTENT_CHUNKS", status: "indexing_queued" },
     CREATE_CONTENT_CHUNKS: { type: "CREATE_TEXT_EMBEDDINGS", status: "indexing_queued" },
   };

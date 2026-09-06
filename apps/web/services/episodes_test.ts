@@ -36,7 +36,7 @@ Deno.test("probíhající a stažená epizoda nabízí sekundární opakování"
 });
 
 Deno.test("opakování hotové epizody vyžaduje potvrzení", () => {
-  assertStringIncludes(episodeActionConfirmation("ready") ?? "", "nový kompletní ML run");
+  assertStringIncludes(episodeActionConfirmation("ready") ?? "", "nová varianta přepisu");
   assertEquals(episodeActionConfirmation("failed"), null);
   assertEquals(episodeActionConfirmation("transcribing"), null);
 });

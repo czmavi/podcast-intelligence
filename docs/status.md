@@ -2,6 +2,15 @@
 
 ## Hotové a ověřené
 
+- ověření změn variant přepisů (2026-09-06): `deno task check` (102 unit testů), 18 integračních
+  testů na izolovaném PostgreSQL včetně skutečného HTTP webu a migrace 024, 29 Python ML testů a
+  `docker compose config --quiet`; prohlížeč nebyl dostupný, vizuální kontrola zatím neproběhla,
+- varianty přepisů s vlastní diarizací, počtem hlasů a přiřazením osob; porovnání po časových
+  úsecích, explicitní výběr před identifikací a indexací, zachování původní varianty i přiřazení,
+- model a způsob zpracování v seznamu i detailu epizod, přegenerování jako další varianta; autopilot
+  přeskakuje výsledky čekající na výběr a pokračuje další epizodou,
+- ElevenLabs Scribe adaptér v TypeScriptu se streamovaným uploadem, Zod validací a uložením vlastní
+  diarizace bez omezení na počet hlasů lokálního modelu; kontrakt ověřen testovacími odpověďmi,
 - checkbox automatického stahování nových dílů v nastavení podcastu; RSS import zařazuje nově
   nalezené epizody transakčně a idempotentně pouze ke stažení, bez spuštění ML,
 - počítadlo „ve frontě / běží“ ignoruje stav `downloaded`,
@@ -112,6 +121,10 @@
 
 ## Hotové, ale vyžaduje externí konfiguraci
 
+- Scribe vyžaduje `ELEVENLABS_API_KEY`; placený přepis proti skutečnému účtu zatím nebyl ověřen,
+- výchozí Whisper v konfiguraci je nově `Cem13/whisper-large-v3-czech`; ověřeny metadata a
+  kompatibilní formát u vydavatele, nikoli stažení vah a inference nového modelu na Sparku; změny
+  variant přepisů a migrace 024 zatím nebyly nasazeny na NAS/Spark,
 - modely se při prvním nasazení jednorázově stáhnou do perzistentní cache Sparku,
 - pyannote diarizace a speaker embeddingy vyžadují `HF_TOKEN` a přijetí podmínek modelů,
 - semantic search vyžaduje načtený BGE-M3 embedding model a BGE multilingual reranker,

@@ -121,7 +121,7 @@ async function runWorkerSlot(
           processing_error = ${message.slice(0, 4000)}, updated_at = now()
           WHERE id = ${job.entityId}`;
       }
-      if (job.type === "PROCESS_AUDIO_ML") {
+      if (job.type === "PROCESS_AUDIO_ML" && job.payload.transcriptProvider !== "elevenlabs") {
         try {
           const diagnosticJobId = await jobs.enqueue(
             "CHECK_AUDIO_ML_HEALTH",

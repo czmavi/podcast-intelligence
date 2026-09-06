@@ -4,7 +4,12 @@ import type { Job, JobProgressReporter } from "../../../packages/domain/job-type
 import type { Config } from "../../../packages/shared/config.ts";
 import { answerGenerationApiKey } from "../../../packages/shared/config.ts";
 import { episodeStorage, toSharedStoragePath } from "../../../packages/shared/paths.ts";
-import { downloadAudio, normalizeAudio } from "../services/audio.ts";
+import { downloadAudio, inspectAudio, normalizeAudio } from "../services/audio.ts";
+import {
+  scribeProcessingResult,
+  scribeResponseSchema,
+  transcribeWithScribe,
+} from "../services/elevenlabs.ts";
 import { AudioMlClient } from "../services/ml-client.ts";
 import { saveProcessingResult } from "../../../packages/database/repositories/processing.ts";
 import { createAndPersistChunks } from "./create_content_chunks.ts";
@@ -205,6 +210,53 @@ export function createHandlers(
           reusedByJob: true,
         };
       }
+      if (job.payload.transcriptProvider === "elevenlabs") {
+        if (!config.ELEVENLABS_API_KEY) throw new Error("Chybí ELEVENLABS_API_KEY.");
+        if (!item.originalAudioPath) throw new Error("Epizoda nemá stažené audio.");
+        const paths = episodeStorage(config.STORAGE_ROOT, item.podcastId, item.id);
+        await Deno.mkdir(paths.derived, { recursive: true });
+        const rawPath = join(paths.derived, `transcript-scribe-${job.id}-raw.json`);
+        await progress({
+          phase: "scribe",
+          message: "Přepisuji audio a rozlišuji hlasy přes ElevenLabs Scribe.",
+          percent: 0,
+        });
+        let raw;
+        try {
+          raw = scribeResponseSchema.parse(JSON.parse(await Deno.readTextFile(rawPath)));
+        } catch (error) {
+          if (!(error instanceof Deno.errors.NotFound)) throw error;
+          raw = await transcribeWithScribe({
+            audioPath: item.originalAudioPath,
+            apiKey: config.ELEVENLABS_API_KEY,
+            model: config.ELEVENLABS_SCRIBE_MODEL,
+            language: config.DEFAULT_TRANSCRIPTION_LANGUAGE,
+            timeoutMs: config.ELEVENLABS_TIMEOUT_MS,
+          });
+          const temporary = `${rawPath}.${crypto.randomUUID()}.tmp`;
+          await Deno.writeTextFile(temporary, JSON.stringify(raw));
+          await Deno.rename(temporary, rawPath);
+        }
+        const inspection = await inspectAudio(item.originalAudioPath);
+        const result = scribeProcessingResult(
+          raw,
+          item.id,
+          config.ELEVENLABS_SCRIBE_MODEL,
+          inspection.durationSeconds,
+        );
+        const transcriptPath = join(paths.derived, `transcript-${job.id}.json`);
+        await Deno.writeTextFile(transcriptPath, JSON.stringify(result, null, 2));
+        const runId = await saveProcessingResult(sql, result, transcriptPath, job.id, {
+          candidate: true,
+          provider: "elevenlabs",
+        });
+        await progress({
+          phase: "scribe",
+          message: "Přepis je připravený k porovnání a výběru.",
+          percent: 100,
+        });
+        return { processingRunId: runId, utterances: result.utterances.length };
+      }
       const current = await sql`
         SELECT active_processing_run_id, processing_status
         FROM episodes WHERE id = ${item.id}
@@ -223,8 +275,10 @@ export function createHandlers(
       }
       if (!item.normalizedAudioPath) throw new Error("Epizoda nemá normalizované audio.");
       if (!await ml.ready()) throw new Error("ML služba zatím není připravená.");
-      await sql`UPDATE episodes SET processing_status = 'transcribing', updated_at = now()
-        WHERE id = ${item.id}`;
+      if (job.payload.nonBlocking !== true) {
+        await sql`UPDATE episodes SET processing_status = 'transcribing', updated_at = now()
+          WHERE id = ${item.id}`;
+      }
       const sharedPath = toSharedStoragePath(
         config.STORAGE_ROOT,
         config.AUDIO_ML_SHARED_ROOT,
@@ -304,7 +358,9 @@ export function createHandlers(
       await Deno.writeTextFile(transcriptPath, JSON.stringify(result, null, 2), {
         createNew: true,
       });
-      const runId = await saveProcessingResult(sql, result, transcriptPath, job.id);
+      const runId = await saveProcessingResult(sql, result, transcriptPath, job.id, {
+        candidate: true,
+      });
       return { processingRunId: runId, utterances: result.utterances.length };
     },
 
