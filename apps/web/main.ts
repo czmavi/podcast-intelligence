@@ -1660,7 +1660,11 @@ async function handler(request: Request): Promise<Response> {
       if (!/^[a-z0-9.-]+$/i.test(name)) throw new NotFoundError("Soubor");
       const path = join(staticRoot, name);
       const content = await Deno.readFile(path);
-      const type = name.endsWith(".css") ? "text/css" : "text/javascript";
+      const type = name.endsWith(".svg")
+        ? "image/svg+xml"
+        : name.endsWith(".css")
+        ? "text/css"
+        : "text/javascript";
       return new Response(content, {
         headers: {
           "content-type": `${type}; charset=utf-8`,

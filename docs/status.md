@@ -2,6 +2,7 @@
 
 ## Hotové a ověřené
 
+- SVG favicon s bílým mikrofonem na modrém gradientu, sdílená všemi stránkami webu,
 - ověření změn variant přepisů (2026-09-06): `deno task check` (102 unit testů), 18 integračních
   testů na izolovaném PostgreSQL včetně skutečného HTTP webu a migrace 024, 29 Python ML testů a
   `docker compose config --quiet`; prohlížeč nebyl dostupný, vizuální kontrola zatím neproběhla,

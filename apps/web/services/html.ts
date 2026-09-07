@@ -177,6 +177,7 @@ export function layout(title: string, body: string): string {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${escapeHtml(title)} · Podcast Intelligence</title>
+  <link rel="icon" type="image/svg+xml" sizes="any" href="/static/favicon.svg?v=20260907.1">
   <link rel="stylesheet" href="/static/app.css?v=20260906.1">
 </head>
 <body>
