@@ -1750,3 +1750,40 @@ td small {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+.interception-app .brand-mark {
+  background: #7c3aed;
+}
+
+.interception-hero {
+  max-width: 760px;
+}
+
+.interception-upload {
+  display: grid;
+  gap: 1.25rem;
+  max-width: 760px;
+}
+
+.interception-options,
+.interception-assignments {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.interception-assignments form {
+  padding-top: 1rem;
+}
+
+.progress-card progress {
+  width: 100%;
+  height: 1rem;
+}
+
+@media (max-width: 640px) {
+  .interception-options,
+  .interception-assignments {
+    grid-template-columns: 1fr;
+  }
+}

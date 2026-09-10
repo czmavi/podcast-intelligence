@@ -29,6 +29,16 @@ export function episodeStorage(root: string, podcastId: string, episodeId: strin
   };
 }
 
+export function interceptionStorage(root: string, interceptionId: string) {
+  const base = safeStoragePath(root, "interceptions", interceptionId);
+  return {
+    base,
+    original: safeStoragePath(base, "original.mp3"),
+    normalized: safeStoragePath(base, "normalized.wav"),
+    derived: safeStoragePath(base, "derived"),
+  };
+}
+
 export function toSharedStoragePath(
   localRoot: string,
   sharedRoot: string,

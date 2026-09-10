@@ -121,6 +121,11 @@ async function runWorkerSlot(
           processing_error = ${message.slice(0, 4000)}, updated_at = now()
           WHERE id = ${job.entityId}`;
       }
+      if (job.entityType === "interception") {
+        await sql`UPDATE interceptions SET processing_status = 'failed',
+          processing_error = ${message.slice(0, 4000)}, updated_at = now()
+          WHERE id = ${job.entityId}`;
+      }
       if (job.type === "PROCESS_AUDIO_ML" && job.payload.transcriptProvider !== "elevenlabs") {
         try {
           const diagnosticJobId = await jobs.enqueue(

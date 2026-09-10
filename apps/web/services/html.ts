@@ -201,6 +201,21 @@ export function layout(title: string, body: string): string {
 </html>`;
 }
 
+export function interceptionLayout(title: string, body: string): string {
+  return `<!doctype html><html lang="cs"><head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${escapeHtml(title)} · Odposlechy</title>
+  <link rel="icon" type="image/svg+xml" sizes="any" href="/static/favicon.svg?v=20260907.1">
+  <link rel="stylesheet" href="/static/app.css?v=20260908.1"></head>
+<body class="interception-app"><header class="site-header"><div class="nav-shell">
+  <a href="/odposlechy" class="brand"><span class="brand-mark">PI</span><span>Odposlechy</span></a>
+  <nav><a href="/odposlechy">Nový odposlech</a><a href="/odposlechy/historie">Historie</a>
+    <a href="/odposlechy/osoby">Osoby</a></nav></div></header>
+  <main class="page-shell">${body}</main>
+  <footer><div class="nav-shell">Odposlechy · oddělené demo</div></footer>
+  <script type="module" src="/static/app.js?v=20260908.1"></script></body></html>`;
+}
+
 export function transcriptLine(
   row: Record<string, unknown>,
   people: Record<string, unknown>[] = [],

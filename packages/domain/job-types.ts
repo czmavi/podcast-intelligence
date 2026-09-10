@@ -8,6 +8,7 @@ export const jobTypes = [
   "CREATE_CONTENT_CHUNKS",
   "CREATE_TEXT_EMBEDDINGS",
   "EXTRACT_CLAIMS",
+  "PROCESS_INTERCEPTION",
 ] as const;
 
 export type JobType = (typeof jobTypes)[number];

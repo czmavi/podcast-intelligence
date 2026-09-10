@@ -64,9 +64,16 @@ import {
   storageUsageHtml,
   transcriptLine,
 } from "./services/html.ts";
+import {
+  assignInterceptionSpeaker,
+  automaticallyAssignInterceptionSpeakers,
+  scheduleInterception,
+} from "../../packages/database/interceptions.ts";
+import { interceptionStorage } from "../../packages/shared/paths.ts";
 import { json, readJson, requireMutationAuth } from "./services/http.ts";
 import { jobDurationHtml } from "./services/jobs.ts";
 import { estimateAutomationDuration } from "./services/automation.ts";
+import { interceptionPages } from "./services/interception-pages.ts";
 import {
   episodeActionAppearance,
   episodeActionConfirmation,
@@ -364,12 +371,11 @@ function jobRow(job: Record<string, unknown>): string {
     <td class="danger">${escapeHtml(job.error ?? "")}</td></tr>`;
 }
 
-async function audioResponse(request: Request, episodeId: string): Promise<Response> {
-  const rows = await sql`
-    SELECT original_audio_path, audio_mime_type
-    FROM episodes WHERE id = ${episodeId}
-  `;
-  const storedPath = rows[0]?.originalAudioPath as string | undefined;
+async function storedAudioResponse(
+  request: Request,
+  storedPath: string | undefined,
+  mimeType: unknown,
+): Promise<Response> {
   if (!storedPath) throw new NotFoundError("Audio");
   const root = resolve(config.STORAGE_ROOT);
   const path = resolve(storedPath);
@@ -385,7 +391,7 @@ async function audioResponse(request: Request, episodeId: string): Promise<Respo
     throw error;
   }
   const size = stat.size;
-  const mime = String(rows[0]?.audioMimeType || "application/octet-stream");
+  const mime = String(mimeType || "application/octet-stream");
   const range = request.headers.get("range");
   const headers = new Headers({
     "content-type": mime,
@@ -451,10 +457,106 @@ async function audioResponse(request: Request, episodeId: string): Promise<Respo
   );
 }
 
+async function audioResponse(request: Request, episodeId: string): Promise<Response> {
+  const row = (await sql`SELECT original_audio_path, audio_mime_type
+    FROM episodes WHERE id = ${episodeId}`)[0];
+  return await storedAudioResponse(
+    request,
+    row?.originalAudioPath as string | undefined,
+    row?.audioMimeType,
+  );
+}
+
 async function api(request: Request, url: URL): Promise<Response | null> {
   const { pathname } = url;
   if (!pathname.startsWith("/api/")) return null;
   if (!["GET", "HEAD"].includes(request.method)) requireMutationAuth(request, config);
+
+  if (pathname === "/api/odposlechy" && request.method === "POST") {
+    const declaredLength = Number(request.headers.get("content-length") ?? 0);
+    if (declaredLength > 500 * 1024 * 1024) {
+      throw new DomainError("MP3 může mít nejvýše 500 MB.", "UPLOAD_TOO_LARGE", 413);
+    }
+    const form = await request.formData();
+    const file = form.get("audio");
+    if (!(file instanceof File) || file.size === 0) {
+      throw new DomainError("Vyberte MP3 soubor.", "AUDIO_REQUIRED");
+    }
+    if (
+      file.size > 500 * 1024 * 1024 ||
+      (!file.name.toLocaleLowerCase().endsWith(".mp3") && file.type !== "audio/mpeg")
+    ) {
+      throw new DomainError("Je povolen pouze MP3 soubor do 500 MB.", "INVALID_AUDIO");
+    }
+    const input = z.object({
+      title: z.string().trim().min(1).max(250),
+      speakerCount: z.coerce.number().int().min(1).max(10),
+      processingMode: z.enum(["segment", "overlap", "overlap_asr_corrected"]),
+    }).parse(Object.fromEntries(form.entries()));
+    const id = crypto.randomUUID();
+    const paths = interceptionStorage(config.STORAGE_ROOT, id);
+    await Deno.mkdir(paths.base, { recursive: true });
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+    const sha256 = [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+    await Deno.writeFile(paths.original, bytes, { createNew: true });
+    const result = await scheduleInterception(sql, {
+      id,
+      title: input.title,
+      filename: file.name,
+      path: paths.original,
+      mimeType: "audio/mpeg",
+      byteSize: file.size,
+      sha256,
+      speakerCount: input.speakerCount,
+      processingMode: input.processingMode,
+    }, config.MAX_JOB_ATTEMPTS);
+    return json(result, 202);
+  }
+  let interceptionId = routeId(pathname, /^\/api\/odposlechy\/([^/]+)$/);
+  if (interceptionId && request.method === "GET") {
+    const row = (await sql`SELECT interception.*, job.progress_percent, job.progress_message,
+      job.status AS job_status FROM interceptions interception LEFT JOIN LATERAL (
+        SELECT * FROM jobs WHERE entity_type = 'interception' AND entity_id = interception.id
+        ORDER BY created_at DESC LIMIT 1
+      ) job ON true WHERE interception.id = ${interceptionId}`)[0];
+    if (!row) throw new NotFoundError("Odposlech");
+    return json(row);
+  }
+  interceptionId = routeId(pathname, /^\/api\/odposlechy\/([^/]+)\/audio$/);
+  if (interceptionId && ["GET", "HEAD"].includes(request.method)) {
+    const row = (await sql`SELECT original_audio_path, audio_mime_type FROM interceptions
+      WHERE id = ${interceptionId}`)[0];
+    return await storedAudioResponse(
+      request,
+      row?.originalAudioPath as string | undefined,
+      row?.audioMimeType,
+    );
+  }
+  interceptionId = routeId(pathname, /^\/api\/odposlechy\/([^/]+)\/automaticky-priradit$/);
+  if (interceptionId && request.method === "POST") {
+    const assigned = await automaticallyAssignInterceptionSpeakers(sql, interceptionId);
+    return json({ assigned: assigned.length });
+  }
+  if (pathname === "/api/odposlechy/osoby" && request.method === "POST") {
+    const input = z.object({
+      displayName: z.string().trim().min(1).max(200),
+      description: z.string().trim().max(4000).optional(),
+    }).parse(await readJson(request));
+    const rows = await sql`INSERT INTO interception_persons
+      (display_name, normalized_name, description) VALUES (${input.displayName},
+      ${normalizedName(input.displayName)}, ${input.description ?? null}) RETURNING *`;
+    return json(rows[0], 201);
+  }
+  const interceptionSpeakerId = routeId(pathname, /^\/api\/odposlechy\/hlasy\/([^/]+)\/priradit$/);
+  if (interceptionSpeakerId && request.method === "POST") {
+    const input = z.object({
+      personId: uuidSchema.optional(),
+      displayName: z.string().trim().min(1).max(200).optional(),
+      description: z.string().trim().max(4000).optional(),
+    }).parse(await readJson(request));
+    return json(await assignInterceptionSpeaker(sql, interceptionSpeakerId, input));
+  }
 
   if (pathname === "/api/podcasts" && request.method === "POST") {
     const input = createPodcastSchema.parse(await readJson(request));
@@ -941,6 +1043,8 @@ function incidentCard(incident: Record<string, unknown>): string {
 }
 
 async function pages(url: URL): Promise<Response> {
+  const interceptionPage = await interceptionPages(url, sql);
+  if (interceptionPage) return interceptionPage;
   if (url.pathname === "/") {
     const podcasts = await sql`
       SELECT podcast.*, count(episode.id)::int AS episode_count,

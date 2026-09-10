@@ -2,7 +2,12 @@
 
 ## Hotové a ověřené
 
+- oddělené demo „Odposlechy“ s vlastní navigací, MP3 uploadem, volbou počtu mluvčích a režimu
+  zpracování, živým progressem, historií, přepisem a přiřazením hlasů; osoby, hlasové reference,
+  nahrávky i přepisy jsou v samostatných tabulkách bez vazby na podcastová data,
 - SVG favicon s bílým mikrofonem na modrém gradientu, sdílená všemi stránkami webu,
+- nasazení aktuálního webu a workeru na NAS (2026-09-07) prošlo včetně migrací, kontroly storage a
+  audio-ML readiness; web i favicon vrací HTTP 200, SVG má správný MIME typ,
 - ověření změn variant přepisů (2026-09-06): `deno task check` (102 unit testů), 18 integračních
   testů na izolovaném PostgreSQL včetně skutečného HTTP webu a migrace 024, 29 Python ML testů a
   `docker compose config --quiet`; prohlížeč nebyl dostupný, vizuální kontrola zatím neproběhla,
@@ -125,7 +130,7 @@
 - Scribe vyžaduje `ELEVENLABS_API_KEY`; placený přepis proti skutečnému účtu zatím nebyl ověřen,
 - výchozí Whisper v konfiguraci je nově `Cem13/whisper-large-v3-czech`; ověřeny metadata a
   kompatibilní formát u vydavatele, nikoli stažení vah a inference nového modelu na Sparku; změny
-  variant přepisů a migrace 024 zatím nebyly nasazeny na NAS/Spark,
+  variant přepisů a migrace jsou nasazené na NASu, přepnutí modelu na Sparku zbývá,
 - modely se při prvním nasazení jednorázově stáhnou do perzistentní cache Sparku,
 - pyannote diarizace a speaker embeddingy vyžadují `HF_TOKEN` a přijetí podmínek modelů,
 - semantic search vyžaduje načtený BGE-M3 embedding model a BGE multilingual reranker,

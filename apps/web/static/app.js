@@ -20,6 +20,56 @@ for (const logo of document.querySelectorAll(".podcast-logo")) {
   logo.addEventListener("error", () => logo.setAttribute("hidden", ""), { once: true });
 }
 
+const interceptionUpload = document.querySelector("[data-interception-upload]");
+interceptionUpload?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button = interceptionUpload.querySelector("button[type=submit]");
+  const errorTarget = interceptionUpload.querySelector("[data-upload-error]");
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Nahrávám…";
+  }
+  if (errorTarget) errorTarget.textContent = "";
+  try {
+    const response = await fetch("/api/odposlechy", {
+      method: "POST",
+      body: new FormData(interceptionUpload),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.message || "Nahrání selhalo.");
+    location.href = `/odposlechy/${encodeURIComponent(result.interceptionId)}`;
+  } catch (error) {
+    if (errorTarget) errorTarget.textContent = error.message;
+    if (button) {
+      button.disabled = false;
+      button.textContent = "Nahrát a zpracovat";
+    }
+  }
+});
+
+const interceptionProgress = document.querySelector("[data-interception-progress]");
+if (interceptionProgress) {
+  const id = interceptionProgress.dataset.interceptionProgress;
+  const poll = async () => {
+    try {
+      const response = await fetch(`/api/odposlechy/${encodeURIComponent(id)}`);
+      const state = await response.json();
+      const bar = interceptionProgress.querySelector("progress");
+      const message = interceptionProgress.querySelector("[data-progress-message]");
+      if (bar) bar.value = Number(state.progressPercent || 0);
+      if (message) message.textContent = state.progressMessage || "Zpracovávám…";
+      if (state.processingStatus === "ready" || state.processingStatus === "failed") {
+        location.reload();
+        return;
+      }
+    } catch {
+      // Krátký výpad spojení nemá zastavit další kontrolu stavu.
+    }
+    setTimeout(poll, 2000);
+  };
+  setTimeout(poll, 1000);
+}
+
 const filterDropdowns = new WeakMap();
 let filterDropdownId = 0;
 
