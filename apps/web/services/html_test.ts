@@ -31,8 +31,8 @@ Deno.test("layout obsahuje sdílený potvrzovací dialog", () => {
   const output = layout("Test", "<p>Obsah</p>");
   assertStringIncludes(output, 'id="confirmation-dialog"');
   assertStringIncludes(output, "Potvrdit akci");
-  assertStringIncludes(output, "/static/app.css?v=20260906.1");
-  assertStringIncludes(output, "/static/app.js?v=20260906.1");
+  assertStringIncludes(output, "/static/app.css?v=20261028.1");
+  assertStringIncludes(output, "/static/app.js?v=20261028.1");
 });
 
 Deno.test("detail podcastu odkazuje na samostatné nastavení", () => {
@@ -92,6 +92,9 @@ Deno.test("promluva nabízí ruční změnu mluvčího i návrat k hlasové kart
     'value="200065d7-a95c-45f8-872c-bb16fd455c9f" selected',
   );
   assertStringIncludes(output, 'data-method="PATCH"');
+  assertStringIncludes(output, "data-utterance-speaker");
+  assertStringIncludes(output, "data-filter-dropdown");
+  assertStringIncludes(output, "data-utterance-save-status");
   assertStringIncludes(output, 'data-seek="7"');
   assertStringIncludes(output, "[00:00:07–00:00:20]");
 });

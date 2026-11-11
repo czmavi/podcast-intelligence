@@ -94,6 +94,8 @@ export const updateUtteranceSpeakerSchema = z.object({
 
 export type UpdateUtteranceSpeakerInput = z.infer<typeof updateUtteranceSpeakerSchema>;
 
+export const updateEpisodeSpeakerReviewSchema = z.object({ skipped: z.boolean() });
+
 const modelInfo = z.object({ name: z.string().min(1), version: z.string().nullable() });
 export const transcriptCorrectionReasonSchema = z.enum([
   "english_term",

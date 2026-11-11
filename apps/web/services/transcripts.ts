@@ -37,7 +37,11 @@ export function transcriptVariantsSection(
 ): string {
   const id = escapeHtml(episode.id);
   return `<section class="card transcript-variants"><h2>Varianty přepisu</h2>
-    <p>Každý přepis má vlastní rozdělení hlasů. Porovnejte výsledky a vyberte přepis před přiřazením osob.</p>
+    <p>${
+    runs.length > 1
+      ? "Každý přepis má vlastní rozdělení hlasů. Porovnejte výsledky a vyberte přepis před přiřazením osob."
+      : "První přepis se vybere automaticky a naváže přiřazení moderátorů. Pro porovnání můžete vytvořit další variantu."
+  }</p>
     ${
     episode.transcriptSelectionPending
       ? '<div class="alert alert-info">Nový přepis je připravený. Nejdříve vyberte variantu pro přiřazení hlasů a vyhledávání.</div>'
@@ -51,7 +55,9 @@ export function transcriptVariantsSection(
         Number(run.speakerCount)
       } mluvčích · ${Number(run.utteranceCount)} promluv</p>
       <div class="row">${transcriptSelectionButton(episode.id, run, episode)}
-      <a href="/episodes/${id}/transcripts?left=${escapeHtml(run.id)}">Zobrazit / porovnat</a></div>
+      <a href="/episodes/${id}/transcripts?left=${escapeHtml(run.id)}">${
+        runs.length > 1 ? "Zobrazit / porovnat" : "Zobrazit přepis"
+      }</a></div>
     </article>`
     ).join("") || "<p>Zatím není žádný dokončený přepis.</p>"
   }</div>

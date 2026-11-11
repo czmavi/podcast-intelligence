@@ -139,7 +139,7 @@ Deno.test("GPT-5.6 Luna používá standardní OpenAI Chat Completions parametry
   assertEquals(requestBodies[0]?.chat_template_kwargs, undefined);
   assertEquals(requestBodies[0]?.thinking_token_budget, undefined);
   assertEquals(requestBodies[1]?.reasoning_effort, "none");
-  assertEquals(requestBodies[1]?.max_completion_tokens, 1000);
+  assertEquals(requestBodies[1]?.max_completion_tokens, 4000);
   assertEquals(requestBodies[1]?.response_format, { type: "json_object" });
 });
 
@@ -281,4 +281,117 @@ Deno.test("answer provider sečte tokeny analýzy a finální odpovědi", async 
     },
     usage: { promptTokens: 240, completionTokens: 60, totalTokens: 300 },
   });
+});
+
+Deno.test("lokální režim ověří citace, vynechá duplicity a vlastní parafrázi modelu zahodí", async () => {
+  const source = {
+    ...sources[0]!,
+    excerpt:
+      "Předplatil jsem si Deník N,\n který mě nemá v oblibě, ale musím říct, že je v obraze.",
+  };
+  let requestBody: Record<string, unknown> | undefined;
+  const provider = new OpenAiCompatibleAnswerProvider({
+    baseUrl: "http://llm.test/v1",
+    model: "local",
+    timeoutMs: 1000,
+    maxTokens: 1200,
+    reasoningEffort: "high",
+    thinkingTokenBudget: 600,
+    responseStyle: "quotes",
+  }, (_url, init) => {
+    requestBody = JSON.parse(String(init?.body));
+    return Promise.resolve(Response.json({
+      choices: [{
+        message: {
+          content: JSON.stringify({
+            answer: "Mluvčí nemá rád Deník N.",
+            sections: [{
+              title: "Předplatné",
+              quotes: [{
+                sourceId: "source-1",
+                quote:
+                  "Předplatil jsem si Deník N, který mě nemá v oblibě, ale musím říct, že je v obraze.",
+              }, { sourceId: "source-2", quote: source.excerpt }],
+            }],
+          }),
+        },
+      }],
+      usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 },
+    }));
+  });
+  const events: AnswerGenerationStreamEvent[] = [];
+  for await (
+    const event of provider.streamGroundedAnswer({
+      question: "Co říká?",
+      sources: [source, { ...source, sourceId: "source-2" }],
+    })
+  ) {
+    events.push(event);
+  }
+  assertEquals(requestBody?.reasoning_effort, "none");
+  assertEquals(requestBody?.chat_template_kwargs, { enable_thinking: false });
+  assertEquals(events.some((e) => e.type === "delta"), false);
+  const result = events.at(-1);
+  if (result?.type !== "complete") throw new Error("Chybí ověřená odpověď");
+  assertEquals(result.answer.answer, "Vybrané doslovné citace z přepisů, uspořádané podle témat.");
+  assertEquals(result.answer.sections, [{
+    title: "Předplatné",
+    sourceIds: ["source-1"],
+    text: "„Předplatil jsem si Deník N, který mě nemá v oblibě, ale musím říct, že je v obraze.“",
+    quotes: [{
+      sourceId: "source-1",
+      text: "Předplatil jsem si Deník N, který mě nemá v oblibě, ale musím říct, že je v obraze.",
+    }],
+  }]);
+  assertEquals(result.usage, { promptTokens: 100, completionTokens: 50, totalTokens: 150 });
+});
+
+Deno.test("lokální režim odmítne změněnou citaci, spojené fragmenty a cizí zdroj před zobrazením", async () => {
+  const source = {
+    ...sources[0]!,
+    excerpt:
+      "Marek Benda zakázal komunikovat s Deníkem N. Podle něj Deník N chce zničit ODS. Deník N mě nemá v oblibě.",
+  };
+  for (
+    const quote of [
+      { sourceId: "source-1", quote: "Marek Benda chce zničit Deník N." },
+      { sourceId: "source-1", quote: "má v oblibě." },
+      {
+        sourceId: "source-1",
+        quote: "Marek Benda zakázal komunikovat s Deníkem N. Deník N chce zničit ODS.",
+      },
+      { sourceId: "source-99", quote: source.excerpt },
+    ]
+  ) {
+    const provider = new OpenAiCompatibleAnswerProvider({
+      baseUrl: "http://llm.test/v1",
+      model: "local",
+      timeoutMs: 1000,
+      maxTokens: 1200,
+      reasoningEffort: "none",
+      thinkingTokenBudget: 0,
+      responseStyle: "quotes",
+    }, () =>
+      Promise.resolve(Response.json({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              sections: [{ title: "Politika", quotes: [quote] }],
+            }),
+          },
+        }],
+      })));
+    await assertRejects(() =>
+      provider.generateGroundedAnswer({ question: "Proč?", sources: [source] })
+    );
+    const events: AnswerGenerationStreamEvent[] = [];
+    await assertRejects(async () => {
+      for await (
+        const event of provider.streamGroundedAnswer({ question: "Proč?", sources: [source] })
+      ) {
+        events.push(event);
+      }
+    });
+    assertEquals(events.some((e) => e.type === "delta" || e.type === "complete"), false);
+  }
 });

@@ -7,6 +7,7 @@ import {
   episodeFilterValues,
   episodeRagExclusionControl,
   episodeSpeakerAssignmentBadge,
+  episodeSpeakerReviewControl,
   episodeStatusBadge,
   episodeStatusesForFilter,
   formatEpisodePublishedDate,
@@ -89,6 +90,14 @@ Deno.test("odkaz na další přiřazování hlasů se vykreslí jen pro nalezeno
   const link = nextSpeakerAssignmentEpisodeLink("200065d7-a95c-45f8-872c-bb16fd455c9f");
   assertStringIncludes(link, "/episodes/200065d7-a95c-45f8-872c-bb16fd455c9f");
   assertStringIncludes(link, "Další díl →");
+});
+
+Deno.test("přeskočený díl má vlastní filtr, štítek a vratné ovládání", () => {
+  assertEquals(episodeFilterValues.includes("skipped"), true);
+  assertStringIncludes(episodeStatusBadge("ready", true), "Přeskočený");
+  assertStringIncludes(episodeSpeakerReviewControl("episode", false), '{"skipped":true}');
+  assertStringIncludes(episodeSpeakerReviewControl("episode", true), '{"skipped":false}');
+  assertStringIncludes(episodeSpeakerReviewControl("episode", true), "Vrátit k přiřazování hlasů");
 });
 
 Deno.test("datum vydání epizody se zobrazí česky a má bezpečný fallback", () => {

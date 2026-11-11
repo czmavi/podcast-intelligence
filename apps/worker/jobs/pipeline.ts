@@ -329,10 +329,11 @@ export function createHandlers(
         const runId = await saveProcessingResult(sql, result, transcriptPath, job.id, {
           candidate: true,
           provider: "elevenlabs",
+          maxAttempts: config.MAX_JOB_ATTEMPTS,
         });
         await progress({
           phase: "scribe",
-          message: "Přepis je připravený k porovnání a výběru.",
+          message: "Přepis je dokončený.",
           percent: 100,
         });
         return { processingRunId: runId, utterances: result.utterances.length };
@@ -440,6 +441,7 @@ export function createHandlers(
       });
       const runId = await saveProcessingResult(sql, result, transcriptPath, job.id, {
         candidate: true,
+        maxAttempts: config.MAX_JOB_ATTEMPTS,
       });
       return { processingRunId: runId, utterances: result.utterances.length };
     },

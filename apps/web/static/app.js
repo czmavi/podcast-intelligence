@@ -159,9 +159,10 @@ const initFilterDropdown = (select) => {
   };
 
   const renderOptions = (query = "") => {
-    const foldedQuery = foldFilterText(query);
+    const queryWords = foldFilterText(query).split(/\s+/).filter(Boolean);
     const options = [...select.options].filter((option) =>
-      !option.disabled && (!foldedQuery || foldFilterText(option.textContent).includes(foldedQuery))
+      !option.disabled &&
+      queryWords.every((word) => foldFilterText(option.textContent).includes(word))
     );
     list.replaceChildren();
     visibleOptions = options.map((option, index) => {
@@ -280,7 +281,19 @@ const initFilterDropdown = (select) => {
 };
 
 for (const select of document.querySelectorAll("select[data-filter-dropdown]")) {
+  // Long transcripts only need a search control for the segment being edited.
+  if (select.closest(".utterance-speaker-editor")) continue;
   initFilterDropdown(select);
+}
+
+for (const editor of document.querySelectorAll(".utterance-speaker-editor")) {
+  editor.addEventListener("toggle", () => {
+    if (!editor.open) return;
+    const select = editor.querySelector("select[data-filter-dropdown]");
+    if (!select) return;
+    initFilterDropdown(select);
+    editor.querySelector(".filter-dropdown-input")?.focus();
+  });
 }
 
 document.addEventListener("click", async (event) => {
@@ -459,6 +472,16 @@ const answerSourceReferenceHtml = (source) =>
 const answerSectionsHtml = (sections, sources) => {
   const sourceById = new Map((sources || []).map((source) => [source.sourceId, source]));
   return (sections || []).map((section) => {
+    if (section.quotes?.length) {
+      return `<section class="answer-section"><h3>${escapeHtml(section.title)}</h3>${
+        section.quotes.map((quote) => {
+          const source = sourceById.get(quote.sourceId);
+          return `<blockquote class="answer-quote"><p>${escapeHtml(quote.text)}</p>${
+            source ? `<footer>${answerSourceReferenceHtml(source)}</footer>` : ""
+          }</blockquote>`;
+        }).join("")
+      }</section>`;
+    }
     const references = (section.sourceIds || []).map((sourceId) => sourceById.get(sourceId)).filter(
       Boolean,
     );
@@ -595,6 +618,11 @@ for (const form of document.querySelectorAll("form[data-api]")) {
     const submit = form.querySelector("button[type=submit]");
     const toggleInput = form.querySelector("[data-toggle-input]");
     const originalLabel = submit?.textContent;
+    const utterance = form.matches("[data-utterance-speaker]") ? form.closest(".utterance") : null;
+    const saveStatus = utterance?.querySelector("[data-utterance-save-status]");
+    const lockedControls = [];
+    if (form.dataset.saving === "true") return;
+    form.dataset.saving = "true";
     try {
       const body = Object.fromEntries(new FormData(form));
       for (const [key, value] of Object.entries(body)) {
@@ -602,6 +630,15 @@ for (const form of document.querySelectorAll("form[data-api]")) {
       }
       for (const checkbox of form.querySelectorAll("input[type=checkbox]")) {
         body[checkbox.name] = checkbox.checked;
+      }
+      if (utterance) {
+        saveStatus.textContent = "Ukládám…";
+        saveStatus.classList.remove("danger");
+        for (const control of form.querySelectorAll("input, select, button")) {
+          if (control.disabled || control === submit) continue;
+          control.disabled = true;
+          lockedControls.push(control);
+        }
       }
       if (submit) {
         submit.disabled = true;
@@ -624,6 +661,20 @@ for (const form of document.querySelectorAll("form[data-api]")) {
       }
       const result = await response.json();
       if (!response.ok) throw new Error(result.message || "Požadavek selhal.");
+      if (utterance) {
+        if (
+          typeof result.speakerLabel !== "string" || !["manual", "cluster"].includes(result.source)
+        ) {
+          throw new Error("Server nevrátil uloženého mluvčího.");
+        }
+        utterance.querySelector("[data-utterance-speaker-label]").textContent = result.speakerLabel;
+        utterance.querySelector("[data-utterance-manual]").hidden = result.source !== "manual";
+        saveStatus.textContent = "Uloženo.";
+        const editor = form.closest("details");
+        editor.open = false;
+        editor.querySelector("summary")?.focus();
+        return;
+      }
       if (form.dataset.render) {
         const target = document.querySelector(form.dataset.render);
         if (form.dataset.kind === "search") {
@@ -659,8 +710,15 @@ for (const form of document.querySelectorAll("form[data-api]")) {
       if (toggleInput?.dataset.previousChecked) {
         toggleInput.checked = toggleInput.dataset.previousChecked === "true";
       }
-      alert(error.message);
+      if (saveStatus) {
+        saveStatus.textContent = error.message || "Mluvčího se nepodařilo uložit. Zkuste to znovu.";
+        saveStatus.classList.add("danger");
+      } else {
+        alert(error.message);
+      }
     } finally {
+      delete form.dataset.saving;
+      for (const control of lockedControls) control.disabled = false;
       if (submit) {
         submit.disabled = false;
         submit.textContent = originalLabel;
@@ -706,25 +764,38 @@ const automationStatusHtml = (status) => {
   const failed = Math.max(0, Number(status.failedCount) || 0);
   const inProgress = Math.max(0, Number(status.inProgressCount) || 0);
   const unavailable = Math.max(0, Number(status.unavailableCount) || 0);
+  const excluded = Math.max(0, Number(status.excludedCount) || 0);
+  const review = Math.max(0, Number(status.reviewCount) || 0);
   const sampleCount = Math.max(0, Number(status.sampleCount) || 0);
   const estimate = remaining === 0
-    ? `<p class="automation-estimate automation-complete">Všechny dostupné epizody jsou hotové.</p>`
+    ? `<p class="automation-estimate automation-complete">${
+      failed
+        ? "Nezbývají další epizody k automatickému zpracování."
+        : "Přepisy všech dostupných epizod jsou zpracované."
+    }</p>`
     : `<p class="automation-estimate">Odhad zbývající aktivní práce:
       <strong>${escapeHtml(formatEstimate(status.estimatedRemainingMs))}</strong></p>`;
   const estimateSource = status.source === "history"
-    ? `Průměr z posledních ${sampleCount} hotových epizod: ${
+    ? `Průměr z posledních ${sampleCount} dokončených přepisů: ${
       escapeHtml(formatEstimate(status.averageEpisodeDurationMs))
     } na epizodu.`
     : `Zatím bez historie; počítám orientačně ${
       escapeHtml(formatEstimate(status.averageEpisodeDurationMs))
     } na epizodu.`;
   return `<div class="automation-status-stats">
-      <span><strong>${processed}</strong><small>hotovo</small></span>
+      <span><strong>${processed}</strong><small>zpracováno</small></span>
       <span><strong>${remaining}</strong><small>zbývá</small></span>
       <span><strong>${inProgress}</strong><small>ve frontě / běží</small></span>
     </div>
     ${estimate}<small class="automation-estimate-source">${escapeHtml(estimateSource)}
-      Odhad nezahrnuje budoucí čekání ve frontě.</small>
+      Odhad zahrnuje stažení, přípravu audia a přepis včetně korekcí. Čekání ve frontě,
+      výběr přepisu a doladění hlasů se nezapočítávají.</small>
+    ${
+    review
+      ? `<small class="automation-status-warning">${review} zpracovaných epizod je k doladění:
+        čekají na výběr přepisu nebo přiřazení hlasů.</small>`
+      : ""
+  }
     ${
     failed
       ? `<small class="automation-status-warning">${failed} epizod s chybou vyžaduje ruční opakování.</small>`
@@ -734,17 +805,21 @@ const automationStatusHtml = (status) => {
     unavailable
       ? `<small class="automation-status-warning">${unavailable} epizod nelze stáhnout, protože už nejsou v RSS.</small>`
       : ""
+  }
+    ${
+    excluded
+      ? `<small class="automation-status-warning">${excluded} epizod je vyloučeno ze zpracování a RAG.</small>`
+      : ""
   }`;
 };
 
 async function loadAutomationStatus(control) {
   if (control.dataset.loading === "true") return;
   const loadedAt = Number(control.dataset.loadedAt) || 0;
-  if (Date.now() - loadedAt < 30_000) return;
   const content = control.querySelector("[data-automation-status-content]");
   if (!content) return;
   control.dataset.loading = "true";
-  content.textContent = "Načítám stav automatizace…";
+  if (!loadedAt) content.textContent = "Načítám stav automatizace…";
   try {
     const response = await fetch(control.dataset.endpoint, {
       headers: { accept: "application/json" },
@@ -760,8 +835,15 @@ async function loadAutomationStatus(control) {
   }
 }
 
-for (const control of document.querySelectorAll("[data-automation-status]")) {
+const automationControls = document.querySelectorAll("[data-automation-status]");
+for (const control of automationControls) {
   loadAutomationStatus(control);
+}
+if (automationControls.length) {
+  setInterval(() => {
+    if (document.hidden) return;
+    for (const control of automationControls) loadAutomationStatus(control);
+  }, 30_000);
 }
 
 const jobProgress = (job) => {

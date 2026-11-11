@@ -26,3 +26,7 @@ Deno.test("odhad automatizace bez historie použije hodinový fallback", () => {
     source: "fallback",
   });
 });
+
+Deno.test("nulový backlog má nulový odhad i bez historie", () => {
+  assertEquals(estimateAutomationDuration([], 0).estimatedRemainingMs, 0);
+});
