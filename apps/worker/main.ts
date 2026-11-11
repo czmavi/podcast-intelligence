@@ -15,6 +15,7 @@ import { loadConfig } from "../../packages/shared/config.ts";
 import { log } from "../../packages/shared/logging.ts";
 import { createHandlers } from "./jobs/pipeline.ts";
 import { nextPipelineStep } from "./services/pipeline-continuation.ts";
+import { runWorkerLoop } from "./services/worker-loop.ts";
 import { transcriptAlignmentModeSchema } from "../../packages/domain/schemas.ts";
 
 const config = loadConfig();
@@ -82,12 +83,7 @@ async function runWorkerSlot(
   allowedTypes: readonly JobType[],
 ): Promise<void> {
   const slotWorkerId = `${workerId}-${queue}-${slot}`;
-  while (!stopping) {
-    const job = await jobs.claim(slotWorkerId, config.JOB_LOCK_TIMEOUT_SECONDS, allowedTypes);
-    if (!job) {
-      await wait(config.JOB_POLL_INTERVAL_MS);
-      continue;
-    }
+  const process = async (job: Job): Promise<void> => {
     const started = performance.now();
     const heartbeat = setInterval(
       () => jobs.heartbeat(job.id, slotWorkerId).catch(() => undefined),
@@ -118,6 +114,11 @@ async function runWorkerSlot(
       await jobs.fail(job, slotWorkerId, message, domain?.retryable ?? true);
       if (job.entityType === "episode" && job.payload.nonBlocking !== true) {
         await sql`UPDATE episodes SET processing_status = 'failed',
+          processing_error = ${message.slice(0, 4000)}, updated_at = now()
+          WHERE id = ${job.entityId}`;
+      }
+      if (job.entityType === "interception") {
+        await sql`UPDATE interceptions SET processing_status = 'failed',
           processing_error = ${message.slice(0, 4000)}, updated_at = now()
           WHERE id = ${job.entityId}`;
       }
@@ -180,7 +181,22 @@ async function runWorkerSlot(
         }
       }
     }
-  }
+  };
+  await runWorkerLoop({
+    claim: () => jobs.claim(slotWorkerId, config.JOB_LOCK_TIMEOUT_SECONDS, allowedTypes),
+    process,
+    shouldStop: () => stopping,
+    wait,
+    pollIntervalMs: config.JOB_POLL_INTERVAL_MS,
+    onError: (error, failure) => {
+      log("error", "Obsluha fronty selhala; další pokus proběhne po prodlevě.", {
+        workerId: slotWorkerId,
+        queue,
+        ...failure,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    },
+  });
 }
 
 async function runAutomationSchedulers(): Promise<void> {

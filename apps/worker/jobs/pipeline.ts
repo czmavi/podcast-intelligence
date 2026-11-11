@@ -3,7 +3,11 @@ import type { Sql } from "../../../packages/database/client.ts";
 import type { Job, JobProgressReporter } from "../../../packages/domain/job-types.ts";
 import type { Config } from "../../../packages/shared/config.ts";
 import { answerGenerationApiKey } from "../../../packages/shared/config.ts";
-import { episodeStorage, toSharedStoragePath } from "../../../packages/shared/paths.ts";
+import {
+  episodeStorage,
+  interceptionStorage,
+  toSharedStoragePath,
+} from "../../../packages/shared/paths.ts";
 import { downloadAudio, inspectAudio, normalizeAudio } from "../services/audio.ts";
 import {
   scribeProcessingResult,
@@ -111,6 +115,82 @@ export function createHandlers(
     })
     : null;
   return {
+    PROCESS_INTERCEPTION: async (job: Job, progress: JobProgressReporter) => {
+      const item = (await sql`SELECT * FROM interceptions WHERE id = ${job.entityId}`)[0];
+      if (!item) throw new Error("Odposlech nebyl nalezen.");
+      const paths = interceptionStorage(config.STORAGE_ROOT, job.entityId);
+      await sql`UPDATE interceptions SET processing_status = 'processing',
+        processing_error = NULL, updated_at = now() WHERE id = ${job.entityId}`;
+      await progress({ phase: "normalization", message: "Normalizuji nahrávku.", percent: 0 });
+      const normalized = await normalizeAudio(String(item.originalAudioPath), paths.normalized);
+      await sql`UPDATE interceptions SET normalized_audio_path = ${normalized.path},
+        duration_seconds = ${normalized.inspection.durationSeconds}, updated_at = now()
+        WHERE id = ${job.entityId}`;
+      if (!await ml.ready()) throw new Error("ML služba zatím není připravená.");
+      const sharedPath = toSharedStoragePath(
+        config.STORAGE_ROOT,
+        config.AUDIO_ML_SHARED_ROOT,
+        normalized.path,
+      );
+      const mode = transcriptAlignmentModeSchema.parse(item.processingMode);
+      const result = await ml.process({
+        episodeId: job.entityId,
+        checkpointId: job.id,
+        audioPath: sharedPath,
+        audioFingerprint: String(item.audioSha256),
+        language: config.DEFAULT_TRANSCRIPTION_LANGUAGE || null,
+        minSpeakers: Number(item.speakerCount),
+        maxSpeakers: Number(item.speakerCount),
+        enableDiarization: true,
+        returnSpeakerEmbeddings: true,
+        transcriptAlignmentMode: mode === "segment" ? "segment" : "overlap",
+      }, progress);
+      const corrected = await applyAsrCorrectionForMode(
+        result,
+        mode,
+        asrCorrectionProvider,
+        {
+          autoApplyThreshold: config.ASR_CORRECTION_AUTO_APPLY_THRESHOLD,
+          concurrency: config.ASR_CORRECTION_CONCURRENCY,
+          contextSeconds: config.ASR_CORRECTION_CONTEXT_SIZE,
+        },
+        { title: String(item.title), description: null },
+      );
+      await Deno.mkdir(paths.derived, { recursive: true });
+      await Deno.writeTextFile(join(paths.derived, "transcript.json"), JSON.stringify(corrected));
+      const vector = (values: number[]) => `[${values.join(",")}]`;
+      await sql.begin(async (tx) => {
+        const speakerIds = new Map<string, string>();
+        for (const speaker of corrected.speakers) {
+          const representative = speaker.representativeSegments[0];
+          const inserted = await tx`INSERT INTO interception_speakers (
+            interception_id, local_label, total_speech_seconds, segment_count,
+            representative_start_seconds, representative_end_seconds, embedding, embedding_model
+          ) VALUES (${job.entityId}, ${speaker.label}, ${speaker.speechSeconds},
+            ${speaker.segmentCount}, ${representative?.start ?? null}, ${
+            representative?.end ?? null
+          },
+            ${speaker.embedding ? vector(speaker.embedding) : null}::vector,
+            ${corrected.models.speakerEmbedding?.name ?? null}) RETURNING id`;
+          speakerIds.set(speaker.label, String(inserted[0]?.id));
+        }
+        for (const utterance of corrected.utterances) {
+          const speakerId = speakerIds.get(utterance.speaker);
+          if (!speakerId) throw new Error(`Chybí hlas ${utterance.speaker}.`);
+          await tx`INSERT INTO interception_utterances (
+            interception_id, speaker_id, sequence_number, start_seconds, end_seconds,
+            playback_start_seconds, text, language
+          ) VALUES (${job.entityId}, ${speakerId}, ${utterance.sequence}, ${utterance.start},
+            ${utterance.end}, ${utterance.playbackStart ?? utterance.start}, ${utterance.text},
+            ${corrected.detectedLanguage})`;
+        }
+        await tx`UPDATE interceptions SET processing_status = 'ready', processing_error = NULL,
+          duration_seconds = ${corrected.durationSeconds}, updated_at = now()
+          WHERE id = ${job.entityId}`;
+      });
+      return { speakers: corrected.speakers.length, utterances: corrected.utterances.length };
+    },
+
     IMPORT_FEED: async (job: Job, progress: JobProgressReporter) => {
       await progress({ phase: "rss_refresh", message: "Aktualizuji RSS feed.", percent: 0 });
       const rows = await sql`SELECT rss_url FROM podcasts WHERE id = ${job.entityId}`;
@@ -249,10 +329,11 @@ export function createHandlers(
         const runId = await saveProcessingResult(sql, result, transcriptPath, job.id, {
           candidate: true,
           provider: "elevenlabs",
+          maxAttempts: config.MAX_JOB_ATTEMPTS,
         });
         await progress({
           phase: "scribe",
-          message: "Přepis je připravený k porovnání a výběru.",
+          message: "Přepis je dokončený.",
           percent: 100,
         });
         return { processingRunId: runId, utterances: result.utterances.length };
@@ -360,6 +441,7 @@ export function createHandlers(
       });
       const runId = await saveProcessingResult(sql, result, transcriptPath, job.id, {
         candidate: true,
+        maxAttempts: config.MAX_JOB_ATTEMPTS,
       });
       return { processingRunId: runId, utterances: result.utterances.length };
     },

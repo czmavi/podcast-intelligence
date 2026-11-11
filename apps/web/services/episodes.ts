@@ -7,6 +7,7 @@ export const episodeFilterValues = [
   "processing",
   "ready",
   "failed",
+  "skipped",
 ] as const;
 
 export type EpisodeFilter = (typeof episodeFilterValues)[number];
@@ -17,6 +18,7 @@ export const episodeFilterLabels: Record<EpisodeFilter, string> = {
   processing: "Zpracovává se",
   ready: "Hotovo",
   failed: "Chyba",
+  skipped: "Přeskočený",
 };
 
 const episodeStatusesByFilter: Record<EpisodeFilter, readonly EpisodeStatus[]> = {
@@ -39,6 +41,7 @@ const episodeStatusesByFilter: Record<EpisodeFilter, readonly EpisodeStatus[]> =
   ],
   ready: ["ready"],
   failed: ["failed"],
+  skipped: [],
 };
 
 const repeatableStatuses = new Set<EpisodeStatus>(
@@ -60,7 +63,10 @@ export function episodeFilterForStatus(statusValue: unknown): EpisodeFilter | nu
     null;
 }
 
-export function episodeStatusBadge(statusValue: unknown): string {
+export function episodeStatusBadge(statusValue: unknown, speakerReviewSkipped = false): string {
+  if (speakerReviewSkipped) {
+    return '<span class="badge badge-neutral" title="Přeskočený při přiřazování hlasů">Přeskočený</span>';
+  }
   const status = String(statusValue);
   const filter = episodeFilterForStatus(status);
   const appearance: Record<EpisodeFilter, string> = {
@@ -69,6 +75,7 @@ export function episodeStatusBadge(statusValue: unknown): string {
     processing: "badge-warning",
     ready: "badge-success",
     failed: "badge-danger",
+    skipped: "badge-neutral",
   };
   if (!filter) {
     return `<span class="badge badge-neutral" title="${escapeHtml(status)}">Neznámý stav</span>`;
@@ -95,6 +102,18 @@ export function nextSpeakerAssignmentEpisodeLink(episodeIdValue: unknown): strin
   return `<div class="speaker-navigation">
     <a class="button" href="/episodes/${escapeHtml(episodeIdValue)}">Další díl →</a>
   </div>`;
+}
+
+export function episodeSpeakerReviewControl(episodeIdValue: unknown, skipped: boolean): string {
+  const endpoint = `/api/episodes/${escapeHtml(episodeIdValue)}/speaker-review`;
+  if (skipped) {
+    return `<div class="alert alert-info"><strong>Díl je přeskočený.</strong>
+      Nebude se nabízet jako další díl k přiřazení hlasů. Přepis a přiřazení zůstávají uložené.
+      <button class="secondary" data-action="${endpoint}" data-method="PATCH"
+        data-body='{"skipped":false}'>Vrátit k přiřazování hlasů</button></div>`;
+  }
+  return `<button class="secondary" data-action="${endpoint}" data-method="PATCH"
+    data-body='{"skipped":true}'>Přeskočit díl</button>`;
 }
 
 export function formatEpisodePublishedDate(value: unknown): string {

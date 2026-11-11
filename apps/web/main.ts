@@ -1,6 +1,7 @@
 import { dirname, fromFileUrl, isAbsolute, join, relative, resolve } from "@std/path";
 import { z, ZodError } from "zod";
 import { createDatabase } from "../../packages/database/client.ts";
+import { podcastAutomationProgress } from "../../packages/database/podcast-automation.ts";
 import {
   listTranscripts,
   scheduleTranscript,
@@ -19,6 +20,10 @@ import {
   scheduleMissingPodcastDownloads,
 } from "../../packages/database/episode-processing.ts";
 import { updateEpisodeRagExclusion } from "../../packages/database/episode-rag.ts";
+import {
+  nextSpeakerReviewEpisode,
+  setEpisodeSpeakerReviewSkipped,
+} from "../../packages/database/episode-review.ts";
 import { searchFilterOptions } from "../../packages/database/search-filters.ts";
 import { assignSpeaker } from "../../packages/database/speaker-assignment.ts";
 import { enqueueGuestIdentificationAfterSpeakerAssignment } from "../../packages/database/automatic-speaker-identification.ts";
@@ -34,6 +39,7 @@ import {
   searchSchema,
   selectTranscriptSchema,
   updateEpisodeRagExclusionSchema,
+  updateEpisodeSpeakerReviewSchema,
   updatePodcastAutoDownloadSchema,
   updatePodcastAutoProcessingSchema,
   updatePodcastAutoRefreshSchema,
@@ -44,15 +50,17 @@ import {
 import { jobQueue } from "../../packages/domain/job-types.ts";
 import { DomainError, NotFoundError } from "../../packages/domain/errors.ts";
 import { importPodcast } from "../../packages/podcast-rss/importer.ts";
+import type { AnswerGenerationProvider, GroundingSource } from "../../packages/search/answer.ts";
 import {
-  type AnswerGenerationProvider,
-  type GroundingSource,
-  OpenAiCompatibleAnswerProvider,
-} from "../../packages/search/answer.ts";
-import { search } from "../../packages/search/search.ts";
+  type AnswerProviderId,
+  answerProviderIds,
+  createAnswerProviders,
+  openAiAnswerModels,
+} from "../../packages/search/answer-providers.ts";
+import { search, searchWithPlan } from "../../packages/search/search.ts";
 import { answerSearchQuery } from "../../packages/search/query.ts";
 import { LocalTextEmbeddingProvider } from "../../packages/search/providers.ts";
-import { answerGenerationApiKey, loadConfig } from "../../packages/shared/config.ts";
+import { loadConfig } from "../../packages/shared/config.ts";
 import { formatTimestamp } from "../../packages/shared/time.ts";
 import { htmlToPlainText } from "../../packages/shared/text.ts";
 import { PushoverClient } from "../../packages/shared/pushover.ts";
@@ -64,9 +72,16 @@ import {
   storageUsageHtml,
   transcriptLine,
 } from "./services/html.ts";
+import {
+  assignInterceptionSpeaker,
+  automaticallyAssignInterceptionSpeakers,
+  scheduleInterception,
+} from "../../packages/database/interceptions.ts";
+import { interceptionStorage } from "../../packages/shared/paths.ts";
 import { json, readJson, requireMutationAuth } from "./services/http.ts";
 import { jobDurationHtml } from "./services/jobs.ts";
 import { estimateAutomationDuration } from "./services/automation.ts";
+import { interceptionPages } from "./services/interception-pages.ts";
 import {
   episodeActionAppearance,
   episodeActionConfirmation,
@@ -74,6 +89,7 @@ import {
   episodeFilterValues,
   episodeRagExclusionControl,
   episodeSpeakerAssignmentBadge,
+  episodeSpeakerReviewControl,
   episodeStatusBadge,
   episodeStatusesForFilter,
   formatEpisodePublishedDate,
@@ -87,38 +103,8 @@ const sql = createDatabase(config);
 const incidents = new SystemIncidentRepository(sql);
 const pushover = new PushoverClient(config);
 const embeddingProvider = new LocalTextEmbeddingProvider(config);
-const answerApiKey = answerGenerationApiKey(config);
-const thinkingCapProvider = config.ANSWER_GENERATION_PROVIDER === "openai-compatible" &&
-    config.ANSWER_GENERATION_BASE_URL
-  ? new OpenAiCompatibleAnswerProvider({
-    baseUrl: config.ANSWER_GENERATION_BASE_URL,
-    model: config.ANSWER_GENERATION_MODEL,
-    ...(answerApiKey ? { apiKey: answerApiKey } : {}),
-    timeoutMs: config.ANSWER_GENERATION_TIMEOUT_MS,
-    maxTokens: config.ANSWER_GENERATION_MAX_TOKENS,
-    reasoningEffort: config.ANSWER_GENERATION_REASONING_EFFORT,
-    thinkingTokenBudget: config.ANSWER_GENERATION_THINKING_TOKEN_BUDGET,
-    protocol: "vllm",
-  })
-  : null;
-const lunaProvider = config.OPENAI_API_KEY
-  ? new OpenAiCompatibleAnswerProvider({
-    baseUrl: "https://api.openai.com/v1",
-    model: config.OPENAI_ANSWER_MODEL,
-    apiKey: config.OPENAI_API_KEY,
-    timeoutMs: config.OPENAI_ANSWER_TIMEOUT_MS,
-    maxTokens: config.OPENAI_ANSWER_MAX_TOKENS,
-    reasoningEffort: config.OPENAI_ANSWER_REASONING_EFFORT,
-    thinkingTokenBudget: 0,
-    protocol: "openai",
-  })
-  : null;
-const answerProviderIds = ["thinking-cap", "gpt-5.6-luna"] as const;
-type AnswerProviderId = (typeof answerProviderIds)[number];
-const answerProviders: Record<AnswerProviderId, AnswerGenerationProvider | null> = {
-  "thinking-cap": thinkingCapProvider,
-  "gpt-5.6-luna": lunaProvider,
-};
+const answerProviders = createAnswerProviders(config);
+const thinkingCapProvider = answerProviders.get("thinking-cap");
 const staticRoot = join(dirname(fromFileUrl(import.meta.url)), "static");
 
 const askInputSchema = z.object({
@@ -138,7 +124,7 @@ function answerProviderFor(input: AskInput): {
   provider: AnswerGenerationProvider | null;
 } {
   const id = input.answerProvider ?? (thinkingCapProvider ? "thinking-cap" : "gpt-5.6-luna");
-  return { id, provider: answerProviders[id] };
+  return { id, provider: answerProviders.get(id) ?? null };
 }
 
 function normalizedName(value: string): string {
@@ -219,11 +205,23 @@ async function findAnswerSources(input: AskInput): Promise<GroundingSource[]> {
     ...(input.personId ? { personId: input.personId } : {}),
     ...(input.dateFrom ? { dateFrom: input.dateFrom } : {}),
     ...(input.dateTo ? { dateTo: input.dateTo } : {}),
-    limit: 8,
+    limit: 16,
     mode: "fulltext" as const,
     precision: "balanced" as const,
   };
-  const results = await search(sql, query, embeddingProvider, { lexicalMatch: "all" });
+  const provider = answerProviderFor(input).provider;
+  const start = performance.now();
+  const plan = await provider?.planSearch?.(input.question, selectedSpeakerName).catch(() => null);
+  console.info(
+    JSON.stringify({
+      event: "search_planning",
+      planned: Boolean(plan),
+      ms: Math.round(performance.now() - start),
+    }),
+  );
+  const results = plan
+    ? await searchWithPlan(sql, query, embeddingProvider, plan)
+    : await search(sql, query, embeddingProvider, { lexicalMatch: "all", diversifyEpisodes: true });
   return results.map((result, index) => ({
     sourceId: `source-${index + 1}`,
     episodeId: result.episodeId,
@@ -253,7 +251,9 @@ function streamAnswer(input: AskInput): Response {
         send({
           type: "phase",
           phase: "sources",
-          message: `Nalezeno zdrojů: ${sources.length}`,
+          message: `Vybráno úryvků pro odpověď: ${sources.length} z ${
+            new Set(sources.map((source) => source.episodeId)).size
+          } epizod`,
         });
         if (!selected.provider) {
           send({
@@ -364,12 +364,11 @@ function jobRow(job: Record<string, unknown>): string {
     <td class="danger">${escapeHtml(job.error ?? "")}</td></tr>`;
 }
 
-async function audioResponse(request: Request, episodeId: string): Promise<Response> {
-  const rows = await sql`
-    SELECT original_audio_path, audio_mime_type
-    FROM episodes WHERE id = ${episodeId}
-  `;
-  const storedPath = rows[0]?.originalAudioPath as string | undefined;
+async function storedAudioResponse(
+  request: Request,
+  storedPath: string | undefined,
+  mimeType: unknown,
+): Promise<Response> {
   if (!storedPath) throw new NotFoundError("Audio");
   const root = resolve(config.STORAGE_ROOT);
   const path = resolve(storedPath);
@@ -385,7 +384,7 @@ async function audioResponse(request: Request, episodeId: string): Promise<Respo
     throw error;
   }
   const size = stat.size;
-  const mime = String(rows[0]?.audioMimeType || "application/octet-stream");
+  const mime = String(mimeType || "application/octet-stream");
   const range = request.headers.get("range");
   const headers = new Headers({
     "content-type": mime,
@@ -451,10 +450,106 @@ async function audioResponse(request: Request, episodeId: string): Promise<Respo
   );
 }
 
+async function audioResponse(request: Request, episodeId: string): Promise<Response> {
+  const row = (await sql`SELECT original_audio_path, audio_mime_type
+    FROM episodes WHERE id = ${episodeId}`)[0];
+  return await storedAudioResponse(
+    request,
+    row?.originalAudioPath as string | undefined,
+    row?.audioMimeType,
+  );
+}
+
 async function api(request: Request, url: URL): Promise<Response | null> {
   const { pathname } = url;
   if (!pathname.startsWith("/api/")) return null;
   if (!["GET", "HEAD"].includes(request.method)) requireMutationAuth(request, config);
+
+  if (pathname === "/api/odposlechy" && request.method === "POST") {
+    const declaredLength = Number(request.headers.get("content-length") ?? 0);
+    if (declaredLength > 500 * 1024 * 1024) {
+      throw new DomainError("MP3 může mít nejvýše 500 MB.", "UPLOAD_TOO_LARGE", 413);
+    }
+    const form = await request.formData();
+    const file = form.get("audio");
+    if (!(file instanceof File) || file.size === 0) {
+      throw new DomainError("Vyberte MP3 soubor.", "AUDIO_REQUIRED");
+    }
+    if (
+      file.size > 500 * 1024 * 1024 ||
+      (!file.name.toLocaleLowerCase().endsWith(".mp3") && file.type !== "audio/mpeg")
+    ) {
+      throw new DomainError("Je povolen pouze MP3 soubor do 500 MB.", "INVALID_AUDIO");
+    }
+    const input = z.object({
+      title: z.string().trim().min(1).max(250),
+      speakerCount: z.coerce.number().int().min(1).max(10),
+      processingMode: z.enum(["segment", "overlap", "overlap_asr_corrected"]),
+    }).parse(Object.fromEntries(form.entries()));
+    const id = crypto.randomUUID();
+    const paths = interceptionStorage(config.STORAGE_ROOT, id);
+    await Deno.mkdir(paths.base, { recursive: true });
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+    const sha256 = [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+    await Deno.writeFile(paths.original, bytes, { createNew: true });
+    const result = await scheduleInterception(sql, {
+      id,
+      title: input.title,
+      filename: file.name,
+      path: paths.original,
+      mimeType: "audio/mpeg",
+      byteSize: file.size,
+      sha256,
+      speakerCount: input.speakerCount,
+      processingMode: input.processingMode,
+    }, config.MAX_JOB_ATTEMPTS);
+    return json(result, 202);
+  }
+  let interceptionId = routeId(pathname, /^\/api\/odposlechy\/([^/]+)$/);
+  if (interceptionId && request.method === "GET") {
+    const row = (await sql`SELECT interception.*, job.progress_percent, job.progress_message,
+      job.status AS job_status FROM interceptions interception LEFT JOIN LATERAL (
+        SELECT * FROM jobs WHERE entity_type = 'interception' AND entity_id = interception.id
+        ORDER BY created_at DESC LIMIT 1
+      ) job ON true WHERE interception.id = ${interceptionId}`)[0];
+    if (!row) throw new NotFoundError("Odposlech");
+    return json(row);
+  }
+  interceptionId = routeId(pathname, /^\/api\/odposlechy\/([^/]+)\/audio$/);
+  if (interceptionId && ["GET", "HEAD"].includes(request.method)) {
+    const row = (await sql`SELECT original_audio_path, audio_mime_type FROM interceptions
+      WHERE id = ${interceptionId}`)[0];
+    return await storedAudioResponse(
+      request,
+      row?.originalAudioPath as string | undefined,
+      row?.audioMimeType,
+    );
+  }
+  interceptionId = routeId(pathname, /^\/api\/odposlechy\/([^/]+)\/automaticky-priradit$/);
+  if (interceptionId && request.method === "POST") {
+    const assigned = await automaticallyAssignInterceptionSpeakers(sql, interceptionId);
+    return json({ assigned: assigned.length });
+  }
+  if (pathname === "/api/odposlechy/osoby" && request.method === "POST") {
+    const input = z.object({
+      displayName: z.string().trim().min(1).max(200),
+      description: z.string().trim().max(4000).optional(),
+    }).parse(await readJson(request));
+    const rows = await sql`INSERT INTO interception_persons
+      (display_name, normalized_name, description) VALUES (${input.displayName},
+      ${normalizedName(input.displayName)}, ${input.description ?? null}) RETURNING *`;
+    return json(rows[0], 201);
+  }
+  const interceptionSpeakerId = routeId(pathname, /^\/api\/odposlechy\/hlasy\/([^/]+)\/priradit$/);
+  if (interceptionSpeakerId && request.method === "POST") {
+    const input = z.object({
+      personId: uuidSchema.optional(),
+      displayName: z.string().trim().min(1).max(200).optional(),
+      description: z.string().trim().max(4000).optional(),
+    }).parse(await readJson(request));
+    return json(await assignInterceptionSpeaker(sql, interceptionSpeakerId, input));
+  }
 
   if (pathname === "/api/podcasts" && request.method === "POST") {
     const input = createPodcastSchema.parse(await readJson(request));
@@ -541,74 +636,12 @@ async function api(request: Request, url: URL): Promise<Response | null> {
       SELECT id, auto_process_enabled FROM podcasts WHERE id = ${id}
     `)[0];
     if (!podcast) throw new NotFoundError("Podcast");
-    const activeStatuses = [
-      ...episodeStatusesForFilter("queued"),
-      ...episodeStatusesForFilter("processing"),
-    ].filter((status) => status !== "downloaded");
-    const [countRows, durationRows] = await Promise.all([
-      sql`
-        SELECT count(*)::int AS total_count,
-          count(*) FILTER (WHERE processing_status = 'ready')::int AS processed_count,
-          count(*) FILTER (
-            WHERE processing_status NOT IN ('ready', 'failed')
-              AND (is_present_in_feed OR original_audio_path IS NOT NULL)
-          )::int AS remaining_count,
-          count(*) FILTER (WHERE processing_status = 'failed')::int AS failed_count,
-          count(*) FILTER (
-            WHERE processing_status::text = ANY(${activeStatuses}) AND NOT transcript_selection_pending
-          )::int AS in_progress_count,
-          count(*) FILTER (
-            WHERE processing_status NOT IN ('ready', 'failed')
-              AND NOT is_present_in_feed AND original_audio_path IS NULL
-          )::int AS unavailable_count
-        FROM episodes WHERE podcast_id = ${id}
-      `,
-      sql`
-        WITH latest_completed_job_per_type AS (
-          SELECT DISTINCT ON (job.entity_id, job.type)
-            job.entity_id, job.type, job.processing_duration_ms, job.completed_at
-          FROM jobs job
-          JOIN episodes episode ON episode.id = job.entity_id
-          WHERE episode.podcast_id = ${id}
-            AND episode.processing_status = 'ready'
-            AND job.entity_type = 'episode'
-            AND job.status = 'completed'
-            AND job.processing_duration_ms > 0
-            AND job.type = ANY(${[
-        "DOWNLOAD_AUDIO",
-        "NORMALIZE_AUDIO",
-        "PROCESS_AUDIO_ML",
-        "IDENTIFY_SPEAKERS",
-        "CREATE_CONTENT_CHUNKS",
-        "CREATE_TEXT_EMBEDDINGS",
-      ]})
-          ORDER BY job.entity_id, job.type, job.completed_at DESC
-        ), episode_history AS (
-          SELECT entity_id, sum(processing_duration_ms)::bigint AS active_duration_ms,
-            max(completed_at) AS completed_at
-          FROM latest_completed_job_per_type
-          GROUP BY entity_id
-          HAVING bool_or(type = 'PROCESS_AUDIO_ML')
-          ORDER BY max(completed_at) DESC
-          LIMIT 5
-        )
-        SELECT active_duration_ms FROM episode_history ORDER BY completed_at DESC
-      `,
-    ]);
-    const counts = countRows[0] ?? {};
+    const { counts, durations } = await podcastAutomationProgress(sql, id);
     return json({
       podcastId: id,
       enabled: Boolean(podcast.autoProcessEnabled),
-      totalCount: Number(counts.totalCount) || 0,
-      processedCount: Number(counts.processedCount) || 0,
-      remainingCount: Number(counts.remainingCount) || 0,
-      failedCount: Number(counts.failedCount) || 0,
-      inProgressCount: Number(counts.inProgressCount) || 0,
-      unavailableCount: Number(counts.unavailableCount) || 0,
-      ...estimateAutomationDuration(
-        durationRows.map((row) => row.activeDurationMs),
-        counts.remainingCount,
-      ),
+      ...counts,
+      ...estimateAutomationDuration(durations, counts.remainingCount),
     });
   }
   id = routeId(pathname, /^\/api\/podcasts\/([^/]+)\/episodes$/);
@@ -641,6 +674,11 @@ async function api(request: Request, url: URL): Promise<Response | null> {
   if (id && request.method === "PATCH") {
     const input = updateEpisodeRagExclusionSchema.parse(await readJson(request));
     return json(await updateEpisodeRagExclusion(sql, config.STORAGE_ROOT, id, input.excluded));
+  }
+  id = routeId(pathname, /^\/api\/episodes\/([^/]+)\/speaker-review$/);
+  if (id && request.method === "PATCH") {
+    const input = updateEpisodeSpeakerReviewSchema.parse(await readJson(request));
+    return json(await setEpisodeSpeakerReviewSkipped(sql, id, input.skipped));
   }
   id = routeId(pathname, /^\/api\/episodes\/([^/]+)\/suggest-speakers$/);
   if (id && request.method === "POST") {
@@ -941,6 +979,8 @@ function incidentCard(incident: Record<string, unknown>): string {
 }
 
 async function pages(url: URL): Promise<Response> {
+  const interceptionPage = await interceptionPages(url, sql);
+  if (interceptionPage) return interceptionPage;
   if (url.pathname === "/") {
     const podcasts = await sql`
       SELECT podcast.*, count(episode.id)::int AS episode_count,
@@ -1051,9 +1091,11 @@ async function pages(url: URL): Promise<Response> {
               AND cluster.processing_run_id = episode.active_processing_run_id
           ) speakers ON true
           WHERE episode.podcast_id = ${podcastId}
-          AND episode.processing_status::text = ANY(${[
+          AND ((${selectedFilter === "skipped"} AND episode.speaker_review_skipped)
+            OR (${selectedFilter !== "skipped"} AND NOT episode.speaker_review_skipped
+              AND episode.processing_status::text = ANY(${[
         ...episodeStatusesForFilter(selectedFilter),
-      ]})
+      ]})))
           ORDER BY published_at DESC NULLS LAST`
       : await sql`SELECT episode.*,
           COALESCE(speakers.total, 0)::int AS speaker_count,
@@ -1086,8 +1128,14 @@ async function pages(url: URL): Promise<Response> {
       );
       const confirmation = episodeActionConfirmation(episode.processingStatus);
       return `<article class="episode-card">
-      <div class="row spread"><div class="row">${episodeStatusBadge(episode.processingStatus)}
-        ${episodeSpeakerAssignmentBadge(episode.speakerCount, episode.verifiedSpeakerCount)}
+      <div class="row spread"><div class="row">${
+        episodeStatusBadge(episode.processingStatus, episode.speakerReviewSkipped)
+      }
+        ${
+        episode.speakerReviewSkipped
+          ? ""
+          : episodeSpeakerAssignmentBadge(episode.speakerCount, episode.verifiedSpeakerCount)
+      }
         ${
         episode.isPresentInFeed === false ? '<span class="badge badge-neutral">Mimo RSS</span>' : ""
       }</div><span class="meta">${
@@ -1253,7 +1301,7 @@ async function pages(url: URL): Promise<Response> {
       utterances,
       chunks,
       artifacts,
-      nextSpeakerEpisodes,
+      nextSpeakerEpisodeId,
       transcriptRuns,
     ] = await Promise.all([
       sql`SELECT person.*, association.role AS podcast_role
@@ -1284,20 +1332,7 @@ async function pages(url: URL): Promise<Response> {
         AND processing_run_id = ${episode.activeProcessingRunId} ORDER BY start_seconds`,
       sql`SELECT * FROM processing_artifacts WHERE episode_id = ${episodeId}
         ORDER BY created_at DESC`,
-      sql`SELECT candidate.id
-        FROM episodes candidate
-        WHERE candidate.podcast_id = ${episode.podcastId}
-          AND candidate.id <> ${episodeId}
-          AND NOT candidate.rag_excluded
-          AND (candidate.transcript_selection_pending OR EXISTS (
-            SELECT 1
-            FROM speaker_clusters cluster
-            WHERE cluster.episode_id = candidate.id
-              AND cluster.processing_run_id = candidate.active_processing_run_id
-              AND cluster.identity_status NOT IN ('verified', 'ignored')
-          ))
-        ORDER BY candidate.published_at DESC NULLS LAST, candidate.created_at DESC, candidate.id DESC
-        LIMIT 1`,
+      nextSpeakerReviewEpisode(sql, episode.podcastId, episodeId),
       listTranscripts(sql, episodeId),
     ]);
     const personOptions = (
@@ -1479,7 +1514,7 @@ async function pages(url: URL): Promise<Response> {
         }</a>
       <section class="page-header"><p class="eyebrow">Epizoda</p>
       <div class="row"><h1>${escapeHtml(episode.title)}</h1>${
-          episodeStatusBadge(episode.processingStatus)
+          episodeStatusBadge(episode.processingStatus, episode.speakerReviewSkipped)
         }${
           episode.isPresentInFeed === false
             ? '<span class="badge badge-neutral">Mimo RSS</span>'
@@ -1514,7 +1549,8 @@ async function pages(url: URL): Promise<Response> {
             : "<p>Audio zatím není stažené.</p>"
         }
       ${transcriptVariantsSection(episode, transcriptRuns, Boolean(config.ELEVENLABS_API_KEY))}
-      <section><h2>Mluvčí</h2>
+      <section><div class="row spread"><h2>Mluvčí</h2>
+      ${episodeSpeakerReviewControl(episodeId, episode.speakerReviewSkipped)}</div>
       ${
           !episode.transcriptSelectionPending && identifiableClusters.length > 0 &&
             assignedSpeakerCount === 0 && clusters.some((cluster) => cluster.hasVoiceEmbedding)
@@ -1532,7 +1568,7 @@ async function pages(url: URL): Promise<Response> {
             ? "<p>Nejdříve vyberte variantu přepisu výše.</p>"
             : speakerCards || "<p>Čeká na diarizaci.</p>"
         }
-      ${nextSpeakerAssignmentEpisodeLink(nextSpeakerEpisodes[0]?.id)}</section>
+      ${nextSpeakerAssignmentEpisodeLink(nextSpeakerEpisodeId)}</section>
       <section><h2>Přepis</h2>${
           (episode.transcriptSelectionPending
             ? "<p>Přepisy jsou dostupné v porovnání variant výše.</p>"
@@ -1597,15 +1633,21 @@ async function pages(url: URL): Promise<Response> {
           <option value="thinking-cap"${
         thinkingCapProvider ? "" : " disabled"
       }>ThinkingCap · lokální</option>
-          <option value="gpt-5.6-luna"${lunaProvider ? "" : " disabled"}${
-        !thinkingCapProvider && lunaProvider ? " selected" : ""
-      }>GPT-5.6 Luna · OpenAI</option>
+          ${
+        openAiAnswerModels.map((model) =>
+          `<option value="${model.id}"${answerProviders.get(model.id) ? "" : " disabled"}${
+            !thinkingCapProvider && model.id === "gpt-5.6-luna" && answerProviders.get(model.id)
+              ? " selected"
+              : ""
+          }>${model.label} · OpenAI</option>`
+        ).join("")
+      }
         </select></label></div>
         <label class="ask-question">Otázka
           <textarea name="question" maxlength="1000"
             placeholder="Například: Jak Michal Půr hodnotí Deník N a jak se jeho názor v čase měnil?"
             required></textarea></label>
-        <div class="ask-submit-row"><p class="meta">Při volbě GPT-5.6 Luna se dohledané
+        <div class="ask-submit-row"><p class="meta">Při volbě modelu OpenAI se dohledané
           přepisové úryvky odešlou do OpenAI API.</p>
           <button type="submit">Analyzovat zdroje</button></div></form>
         <div id="answer" class="results"></div></section>`,

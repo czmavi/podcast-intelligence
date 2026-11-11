@@ -26,7 +26,7 @@ Deno.test("doplňková identifikace hosta znovu nespustí indexaci", () => {
   );
 });
 
-Deno.test("přepis čeká na výběr před identifikací mluvčích a chunkingem", () => {
+Deno.test("uložení nebo výběr přepisu řídí identifikaci, obecná pipeline naváže až chunkingem", () => {
   assertEquals(nextPipelineStep({ type: "PROCESS_AUDIO_ML", payload: {} }), null);
   assertEquals(nextPipelineStep({ type: "IDENTIFY_SPEAKERS", payload: {} }), {
     type: "CREATE_CONTENT_CHUNKS",

@@ -11,7 +11,7 @@ export async function saveProcessingResult(
   result: ProcessAudioResponse,
   transcriptPath: string,
   sourceJobId: string,
-  options: { candidate?: boolean; provider?: "local" | "elevenlabs" } = {},
+  options: { candidate?: boolean; provider?: "local" | "elevenlabs"; maxAttempts?: number } = {},
 ): Promise<string> {
   return await sql.begin(async (tx) => {
     await tx`SELECT id FROM episodes WHERE id = ${result.episodeId} FOR UPDATE`;
@@ -19,6 +19,10 @@ export async function saveProcessingResult(
       SELECT id FROM processing_runs WHERE source_job_id = ${sourceJobId}
     `)[0];
     if (existing) return String(existing.id);
+    const previous = await tx`SELECT id FROM processing_runs
+      WHERE episode_id = ${result.episodeId} AND status = 'completed' LIMIT 1`;
+    const selectionPending = options.candidate === true && previous.length > 0;
+    const autoContinue = options.candidate === true && !selectionPending;
     const runRows = await tx`
       INSERT INTO processing_runs (
         episode_id, status, pipeline_version, transcription_model,
@@ -113,13 +117,18 @@ export async function saveProcessingResult(
     `;
     await tx`
       UPDATE episodes
-      SET active_processing_run_id = CASE WHEN ${options.candidate === true}
+      SET active_processing_run_id = CASE WHEN ${selectionPending}
             THEN active_processing_run_id ELSE ${runId}::uuid END,
-          transcript_selection_pending = ${options.candidate === true},
-          processing_status = 'transcribed',
+          transcript_selection_pending = ${selectionPending},
+          processing_status = ${autoContinue ? "speaker_identification_pending" : "transcribed"},
           duration_seconds = ${result.durationSeconds}, processing_error = NULL, updated_at = now()
       WHERE id = ${result.episodeId}
     `;
+    if (autoContinue) {
+      await tx`INSERT INTO jobs (type, entity_type, entity_id, payload, max_attempts)
+        VALUES ('IDENTIFY_SPEAKERS', 'episode', ${result.episodeId},
+          ${tx.json({ processingRunId: runId })}, ${options.maxAttempts ?? 3})`;
+    }
     return runId;
   });
 }

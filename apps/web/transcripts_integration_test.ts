@@ -82,10 +82,25 @@ Deno.test({
       });
       assertEquals(unavailable.status, 409);
       await unavailable.body?.cancel();
+      const automationBefore = await request(`/api/podcasts/${podcastId}/automation-status`);
+      const before = await automationBefore.json();
+      assertEquals(automationBefore.status, 200);
+      assertEquals(before.processedCount, 1);
+      assertEquals(before.remainingCount, 0);
+      assertEquals(before.reviewCount, 1);
+      assertEquals(before.estimatedRemainingMs, 0);
       const selected = await request(`/api/episodes/${episodeId}/transcripts/select`, {
         runId: runs[1],
       });
       assertEquals(selected.status, 202, await selected.text());
+      const automationAfter = await request(`/api/podcasts/${podcastId}/automation-status`);
+      const after = await automationAfter.json();
+      assertEquals(automationAfter.status, 200);
+      assertEquals(after.processedCount, 1);
+      assertEquals(after.remainingCount, 0);
+      assertEquals(after.inProgressCount, 0);
+      assertEquals(after.reviewCount, 1);
+      assertEquals(after.estimatedRemainingMs, 0);
       const detail = await request(`/episodes/${episodeId}`);
       const detailText = await detail.text();
       assertEquals(detail.status, 200, detailText);

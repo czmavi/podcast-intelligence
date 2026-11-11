@@ -3,6 +3,7 @@ name: podcast-intelligence
 services:
   postgres:
     image: pgvector/pgvector:pg17
+    init: true
     restart: unless-stopped
     environment:
       POSTGRES_DB: podcast
@@ -17,9 +18,9 @@ services:
         target: /backups
         read_only: true
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U podcast -d podcast"]
+      test: ["CMD", "pg_isready", "-U", "podcast", "-d", "podcast", "-t", "10"]
       interval: 5s
-      timeout: 3s
+      timeout: 15s
       retries: 20
 
   migrate:

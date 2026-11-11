@@ -25,6 +25,23 @@ Deploy je opakovatelný: přenese zdroje bez macOS AppleDouble metadat, sestaví
 spustí dopředné migrace, obnoví web a worker a provede health, storage read-write a audio-ML
 readiness test. Po úspěchu vytvoří marker `/volume1/docker/podcast-tool/.migration-complete`.
 
+PostgreSQL Compose konfigurace používá `init: true`, aby osiřelé procesy healthchecků přebíral
+Docker init místo postmasteru. Healthcheck spouští `pg_isready` přímo přes `CMD`, s klientským
+timeoutem 10 s a Docker timeoutem 15 s. Postmaster jako PID 1 může exit 2 osiřelého klienta
+vyhodnotit jako pád backendu a obnovit celý cluster; tento mechanismus byl 2026-10-30 reprodukován
+na izolovaném kontejneru stejného image. Oprava je nasazená od 2026-10-30 v 19:55 CET po bezpečném
+dokončení ML úlohy, ověřené záloze a znovuvytvoření PostgreSQL kontejneru; podrobnosti jsou v
+`docs/status.md`. Samotný běžný deploy webu/workeru existující databázový kontejner nepřepíná. Popis
+stejného problému a opravy je v
+[upstream incidentu SuperSync](https://github.com/super-productivity/super-productivity/pull/9917).
+
+Při výměně workeru během dlouhého ML jobu nejprve připravte a ověřte nový image. SIGTERM obsloužený
+workerem zastaví nové claimy a plánování, ale nechá současný handler doběhnout. Nepoužívejte
+`docker stop` s kratší prodlevou než zbývající úloha: po prodlevě posílá SIGKILL. Samotné
+`docker kill --signal=TERM` neplánuje násilné ukončení; výměna pak musí čekat na exit, ověřit
+dokončení úlohy a spustit nový worker. Během tohoto čekání neprovádějte jiný deploy. Připravený
+jednorázový postup z 2026-10-30 a jeho markery jsou popsané v `docs/status.md`.
+
 Před ručním zásahem do databáze vytvořte custom-format `pg_dump` do adresáře `backups` a ověřte jej
 pomocí `pg_restore --list`. Obnova musí proběhnout při zastaveném webu a workeru. Samotný PostgreSQL
 adresář nekopírujte za běhu databáze. Podcastové soubory a databázový dump zálohujte ve stejném
@@ -70,6 +87,13 @@ Worker navyšuje `attempts`, posílá heartbeat a retry plánuje exponenciálně
 čerstvého heartbeat může jiný worker převzít po `JOB_LOCK_TIMEOUT_SECONDS`. SIGINT/SIGTERM zastaví
 claimování dalších jobs a aktuální doběhne. Po max attempts je job `failed` a epizoda `failed`.
 
+Výpadek databáze při claimování nebo ukládání výsledku/chyby neukončí celý worker. Každý slot
+zaloguje chybu s ID úlohy, pokud ji již převzal, a další odběr opakuje s exponenciální prodlevou od
+`max(1000, JOB_POLL_INTERVAL_MS)` do 30 sekund. Úspěšný průchod prodlevu resetuje. Handler se
+neopakuje přímo: další pokus vždy prochází databázovým claimem, protože přerušený zápis mohl být
+potvrzený. Pokud se nepodařilo uložit selhání úlohy, její zámek zůstává do vypršení heartbeat
+timeoutu. Ostatní sloty pokračují a čekání na další pokus lze přerušit SIGINT/SIGTERM.
+
 Audio ML klient nepoužívá pevný limit na celý požadavek. `AUDIO_ML_IDLE_TIMEOUT_MS` (výchozí 30
 minut) měří pouze dobu bez progress eventu; při čekání na pipeline slot posílá služba pravidelný
 keepalive. Odpojení klienta nastaví kooperativní cancellation, která ukončí čekání okamžitě a
@@ -112,10 +136,12 @@ uloženého audia se přeskočí.
 
 ## Varianty přepisů a ElevenLabs Scribe
 
-Nový přepis čeká na ruční výběr varianty v detailu epizody. To platí i pro první přepis vytvořený
-autopilotem. Teprve volba „Použít pro přiřazení hlasů“ spustí identifikaci a indexaci. Dosavadní
-vybraný přepis zůstává během přípravy další varianty dostupný pro vyhledávání. Původní přepisy i
-jejich přiřazení osob se uchovávají; každá varianta může mít jiné hlasy a jiný počet mluvčích.
+První dokončený přepis se automaticky vybere a spustí přiřazení moderátorů, identifikaci a indexaci.
+Uložení, výběr a zařazení identifikace probíhají v jedné transakci; opakování stejné úlohy nevytvoří
+další identifikaci. Až další vytvořená varianta čeká na ruční výběr v detailu epizody, kde volba
+„Použít pro přiřazení hlasů“ spustí identifikaci a indexaci. Dosavadní vybraný přepis zůstává během
+přípravy další varianty dostupný pro vyhledávání. Původní přepisy i jejich přiřazení osob se
+uchovávají; každá varianta může mít jiné hlasy a jiný počet mluvčích.
 
 Detail i seznam epizod ukazují použitý model a způsob zpracování. „Přegenerovat lokálně“ použije
 aktuální Whisper a nastavení diarizace podcastu. V detailu lze přes „Vytvořit / přegenerovat přepis“
@@ -159,10 +185,15 @@ Detail podcastu odkazuje přes tlačítko „⚙ Nastavení“ na `/podcasts/:id
 sdružuje ruční i automatickou denní aktualizaci RSS, hromadné stažení, přepínač automatického
 zpracování a volbu diarizace; z detailu byly tyto provozní akce odstraněny.
 
-Viditelný panel automatizace se načte při otevření nastavení. Ukazuje počet hotových a zbývajících
-epizod, epizody ve frontě či běhu a orientační čas aktivní práce. Odhad je průměr součtu aktivních
-dob posledních pěti dokončených epizod; doba čekání ve frontě se nepočítá. Bez historie se použije
-konzervativní fallback 60 minut na epizodu.
+Viditelný panel automatizace se načte při otevření nastavení a obnovuje se každých 30 sekund, pokud
+je stránka viditelná. Epizodu počítá jako zpracovanou už po dokončení přepisu včetně korekcí; výběr
+varianty, přiřazení hlasů ani navazující indexace ji nevracejí do odhadu zbývající práce. Epizody
+čekající na výběr přepisu nebo doladění hlasů ukazuje zvlášť jako podmnožinu zpracovaných. Epizody
+vyloučené z RAG se do backlogu nezapočítávají. Odhad násobí počet zbývajících epizod průměrem
+aktivních dob stažení, normalizace a přepisu posledních pěti dokončených přepisů, včetně těch
+čekajících na ruční doladění. Čekání ve frontě ani identifikace a indexace se do průměru nepočítají.
+Bez historie se použije konzervativní fallback 60 minut na epizodu. Jde o odhad práce po celých
+epizodách, nikoli průběžný odpočet času právě běžící úlohy.
 
 Opětovné zpracování běžně vybere první chybějící artefakt. Download i normalizace znovu používají
 validní soubor; uložený dokončený processing run zabrání opakovanému ML volání po pádu mezi uložením
@@ -220,6 +251,21 @@ ukládá jako override a pozdější přiřazení celé hlasové karty ji nepře
 override odstraní a okamžitě převezme její aktuální osobu. Nově vybraná osoba se zároveň
 idempotentně doplní mezi účastníky epizody s dosud neznámou rolí.
 
+Vyhledávání osoby v segmentu ignoruje diakritiku i pořadí částí jména; výběr lze potvrdit klávesou
+Enter. Editor se inicializuje až při otevření segmentu. Uložení odešle
+`PATCH /api/utterances/:id/speaker` a z odpovědi aktualizuje jméno a štítek ruční úpravy přímo v
+segmentu, bez načtení celé stránky nebo přerušení audia. Chyba se zobrazí u segmentu a volba zůstane
+připravená pro opakování.
+
+Tlačítko „Přeskočit díl“ v sekci Mluvčí vyřadí celou epizodu z navigace „Další díl“ a počtu „k
+doladění“, včetně čekání na výběr varianty. Epizoda má štítek „Přeskočený“ a v seznamu podcastu
+vlastní filtr `status=skipped`; ostatní stavové filtry ji vynechávají, „Všechny stavy“ ji ponechává.
+Přepis, audio, přiřazení i indexace zůstávají zachované. „Vrátit k přiřazování hlasů“ znovu povolí
+nabízení epizody, pokud ještě obsahuje nevyřešené hlasy nebo čeká na výběr přepisu. Jde o příznak
+`episodes.speaker_review_skipped` z migrace `026_episode_speaker_review_skip.sql`, nezávislý na
+stavu automatického zpracování; zůstává nastavený i po vytvoření další varianty přepisu. API
+`PATCH /api/episodes/:id/speaker-review` přijímá `{ "skipped": true | false }`.
+
 Osoby jsou globální, jejich role je ale vztažená ke konkrétnímu podcastu přes `podcast_persons`.
 Vazba je M:N a obsahuje právě roli `moderator` nebo `guest`; stejný člověk proto může mít v různých
 podcastech odlišnou roli. Migrace `016_podcast_persons.sql` odvodí současné vazby z účastníků
@@ -262,43 +308,81 @@ epizod může Answer server obsloužit až dva dotazy najednou: samostatný kont
 zůstávají váhy v unified paměti, ale model neprovádí inference. Provider je ve výchozím stavu
 vypnutý a jeho selhání nezablokuje vyhledání zdrojů.
 
-Formulář „Otázka nad zdroji“ umí pro každý dotaz přepnout mezi lokálním ThinkingCapem a
-`gpt-5.6-luna` přes OpenAI Chat Completions API. Luna se nabídne po nastavení `OPENAI_API_KEY`;
-model, timeout, výstupní limit a reasoning lze změnit přes `OPENAI_ANSWER_MODEL`,
+Formulář „Otázka nad zdroji“ umí pro každý dotaz přepnout mezi lokálním ThinkingCapem a modely
+OpenAI `gpt-5.6-luna`, `gpt-6.1-sol`, `gpt-6-sol` a `gpt-6-luna` přes Chat Completions API. Všechny
+volby OpenAI používají stávající `OPENAI_API_KEY`; bez něj jsou v nabídce nedostupné.
+`OPENAI_ANSWER_MODEL` zachovává přepsání modelu původní volby GPT-5.6 Luna; nové volby posílají své
+vlastní pevné API ID. Timeout, výstupní limit a reasoning sdílejí nastavení
 `OPENAI_ANSWER_TIMEOUT_MS`, `OPENAI_ANSWER_MAX_TOKENS` a `OPENAI_ANSWER_REASONING_EFFORT`. Výchozí
 effort je `low` a limit 4000 tokenů. OpenAI větev neposílá vLLM-specifické parametry a používá
 `max_completion_tokens`; finální odpověď prochází stejnou validací JSON a source IDs jako lokální
-model. Při této volbě opouštějí dohledané přepisové úryvky lokální síť a jsou odeslány do OpenAI
-API, na což UI výslovně upozorňuje.
+model. GPT-6.1 Sol nepodporuje effort `none`, takže používá alespoň `low` i při sestavení finální
+JSON odpovědi. Ostatní nové modely `none` podporují. Názvy a parametry byly ověřeny v
+[OpenAI Docs pro GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol),
+[GPT-6 Sol](https://developers.openai.com/api/docs/models/gpt-6-sol) a
+[GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna). Při volbě kteréhokoli modelu
+OpenAI opouštějí dohledané přepisové úryvky lokální síť a jsou odeslány do OpenAI API, na což UI
+výslovně upozorňuje.
 
-Portál používá ve výchozím stavu rychlý režim bez interního uvažování:
+Analýza vybírá nejvýše 16 úryvků, obvykle nejvýše dva z jedné epizody; při explicitním filtru
+epizody může použít více samostatných pasáží z téhož dílu. Výběr má přednostně pokrýt různé díly.
+Databázový limit kandidátů se uplatňuje až po odstranění identických textů a vyvážení epizod, takže
+opakování v jednom přepisu nevytlačí další díly. Dlouhé opakující se ASR smyčky a výrazně
+překrývající se pasáže se do podkladů nezařazují; původní přepis zůstává beze změny. Krátké
+vyhledávací termíny (například samostatné „N“) se hledají přesně. Počet v průběhu odpovědi označuje
+vybrané úryvky a epizody, nikoli celkový počet zmínek v archivu. Tato úprava nevyžaduje reindexaci.
 
-```dotenv
-ANSWER_GENERATION_REASONING_EFFORT=none
-ANSWER_GENERATION_MAX_TOKENS=500
-```
+Před hledáním se od tématu oddělí běžný rámec otázky: například „Co říká o Deníku N“, „Jak hodnotí
+Deník N“ a „Jaký má názor na Deník N“ hledají stejné téma. Slovesa jako „hodnotí“ se nevyžadují
+doslova ve zdrojovém úryvku. Dovětek „a jak se jeho názor v čase měnil“ zůstává pokynem pro model,
+ale neomezuje fulltext; původní otázka se modelu předává celá. Filtr mluvčího, epizody a data,
+přesná shoda krátkého „N“ i pravidla výběru různých epizod zůstávají platná pro všechny modely.
 
-Pro experiment s reasoningem je potřeba přepnout effort a současně nechat dostatečný prostor pro
-interní úvahu i finální JSON. Praktický výchozí experiment je:
+Před výběrem podkladů pro otázku požádá web zvolený model o vyhledávací plán. Posílá otázku a jméno
+vybraného mluvčího. Plán přijímá nejvýše čtyři podmínky (zmínka osoby nebo téma). `all` vyžaduje
+shodu všech ve stejném úryvku, `any` připouští jednotlivé shody. Až čtyři volitelné výrazy `prefer`
+ovlivní pořadí před databázovým limitem. `each_branch` střídá výsledky větví, `ranked` upřednostní
+skóre. Filtry formuláře se aplikují na každou větev a shoda se ověřuje v textu vybraného mluvčího.
+Web plán validuje přes Zod a dotaz sestavuje s databázovými parametry. Chybějící provider, chyba,
+neplatný plán nebo timeout (nejvýše 15 s) vedou k původnímu fulltextovému hledání. Platný plán s
+nulou shod se automaticky nerozšiřuje. Výsledek validace a dobu volání v ms zaznamenává událost
+`search_planning`. Finální odpověď používá původní otázku a vybrané úryvky.
 
-```dotenv
-ANSWER_GENERATION_REASONING_EFFORT=high
-ANSWER_GENERATION_MAX_TOKENS=4096
-ANSWER_GENERATION_THINKING_TOKEN_BUDGET=2048
-ANSWER_GENERATION_TIMEOUT_MS=300000
-```
+Explicitní srovnání dvou témat oddělených „vs“, „versus“ nebo „proti“ hledá každou stranu samostatně
+a výsledky střídá před odstraněním duplicit. Společná zmínka obou témat není podmínkou. Při
+fulltextovém výběru podkladů pro odpověď se dvouslovná osobní jména rozpoznávají podle lexikonu
+křestních jmen doplněného o jména z katalogu `persons`. Stejný postup funguje i pro samostatný dotaz
+na jednu osobu. Celé jméno má vyšší prioritu než samotné příjmení; podporují se běžné české pádové
+tvary. Nejde o úplný jazykový analyzátor: neznámá křestní jména, složená jména a nerozpoznané tvary
+zůstávají přísným dotazem. Obecná témata jako „Česká televize“ se na poslední slovo nezkracují.
 
-Server běží s `--reasoning-parser qwen3`. Reasoning větev je dvoufázová: první volání pošle
-`enable_thinking=true`, oddělí interní úvahu a do aplikace ji nevrací; druhé krátké volání v režimu
-`no-think` zkontroluje návrh proti zdrojům a vytvoří validovaný JSON. Dvě fáze obcházejí
-nespolehlivou kombinaci thinking režimu a vynuceného JSON výstupu tohoto checkpointu.
-`THINKING_TOKEN_BUDGET` musí být menší než `MAX_TOKENS`, aby zbyly tokeny na finální odpověď. Změna
-těchto hodnot vyžaduje pouze znovuvytvoření web kontejneru, ne Answer serveru ani `audio-ml`.
+Příjmení se použije samostatně, až když aktivní a nevyloučené přepisy ve vybraném rozsahu doloží
+celé jméno. Pokud kontext obsahuje více rozpoznaných křestních jmen se stejným příjmením, musí
+samotné příjmení pocházet z dílu, kde je doložena pouze požadovaná osoba, nebo musí vybraný úryvek
+obsahovat její celé jméno. Kontext může dodat jiný mluvčí; samotné výsledky však stále obsahují jen
+výroky vybrané osoby. Rozlišení závisí na přepisu a pokrytí lexikonu, není zárukou identity každé
+zmínky. Obě strany zachovávají filtry podcastu, epizody, mluvčího i data.
 
-Web volá `/api/ask` s `Accept: application/x-ndjson`. Odpověď průběžně posílá fáze hledání zdrojů,
-reasoningu (je-li zapnutý), generování odpovědi a dokončování citací. Hodnota `answer` se z
-vynuceného JSON výstupu bezpečně dekóduje už během generování; po dokončení se stále validuje celý
-JSON, povolené source IDs a Zod kontrakt. Klientské odpojení stream ukončí bez restartu modelu.
+Kandidáty nejprve omezí existující GIN index `normalized_search_vector`, teprve pak se ověřuje text
+vybraného mluvčího. Rozšíření nepotřebuje modelové volání, migraci, reindexaci ani nové zpracování
+audia. Původní otázka dál řídí odpověď modelu.
+
+ThinkingCap používá režim `responseStyle: "quotes"`: jedním voláním bez reasoningu vybírá doslovné
+citace a jejich tematické zařazení. `ANSWER_GENERATION_MAX_TOKENS` a `ANSWER_GENERATION_TIMEOUT_MS`
+nadále omezují volání; nastavení reasoning effort/budget se v tomto režimu nepoužívá. Každá citace
+musí být souvislým úsekem konkrétního dodaného přepisu. Server povoluje pouze sjednocení bílých
+znaků, ostatní změny textu odmítne. Po ověření zobrazuje text převzatý ze zdroje s vlastním odkazem
+na díl a čas. Model nevytváří úvodní faktické shrnutí; tematické nadpisy pouze organizují citace.
+Ověření doslovnosti nepotvrzuje správnost samotného audio přepisu.
+
+Volby OpenAI nadále používají shrnutí: při zapnutém reasoningu nejprve připraví pracovní návrh a pak
+finální JSON proti zdrojům. Finální odpověď má celý nakonfigurovaný výstupní limit, bez dodatečného
+stropu 1000 tokenů. Kontrola známých source IDs není sémantickým ověřením každého tvrzení.
+
+Web volá `/api/ask` s `Accept: application/x-ndjson`. U ThinkingCapu se zobrazují fáze hledání,
+výběru citací a ověření doslovnosti; text se odešle až po úplné validaci. U shrnutí se pole `answer`
+průběžně dekóduje a po dokončení se validuje celý JSON, source IDs a Zod kontrakt. Klientské
+odpojení stream ukončí bez restartu modelu.
 
 Při změně textového modelu nejprve přidejte migraci pro správnou dimenzi, pak vynulujte
 embedding/model sloupce dotčených chunků a spusťte `deno task search:reindex`. Příkaz znovu vytvoří

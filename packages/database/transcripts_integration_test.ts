@@ -48,7 +48,29 @@ Deno.test({
       }
       const firstJob = (await sql`INSERT INTO jobs(type, entity_type, entity_id, status)
         VALUES ('PROCESS_AUDIO_ML', 'episode', ${episodeId}, 'completed') RETURNING id`)[0];
-      const firstRun = await saveProcessingResult(sql, result(2), path, String(firstJob?.id));
+      const firstOptions = { candidate: true, maxAttempts: 5 };
+      const [firstRun, firstRetry] = await Promise.all([
+        saveProcessingResult(sql, result(2), path, String(firstJob?.id), firstOptions),
+        saveProcessingResult(sql, result(2), path, String(firstJob?.id), firstOptions),
+      ]);
+      assertEquals(firstRetry, firstRun);
+      assertEquals(
+        (await sql`SELECT active_processing_run_id, transcript_selection_pending, processing_status
+          FROM episodes WHERE id = ${episodeId}`)[0],
+        {
+          activeProcessingRunId: firstRun,
+          transcriptSelectionPending: false,
+          processingStatus: "speaker_identification_pending",
+        },
+      );
+      const automaticJobs = await sql`SELECT payload, max_attempts FROM jobs
+        WHERE entity_id = ${episodeId} AND type = 'IDENTIFY_SPEAKERS'`;
+      assertEquals([...automaticJobs], [{
+        payload: { processingRunId: firstRun },
+        maxAttempts: 5,
+      }]);
+      await sql`UPDATE jobs SET status = 'completed'
+        WHERE entity_id = ${episodeId} AND type = 'IDENTIFY_SPEAKERS'`;
       const cluster =
         (await sql`SELECT id FROM speaker_clusters WHERE processing_run_id = ${firstRun} ORDER BY local_label`)[
           0
@@ -80,6 +102,11 @@ Deno.test({
         saveProcessingResult(sql, result(3), path, nextJob.jobId, options),
       ]);
       assertEquals(duplicateRun, secondRun);
+      assertEquals(
+        (await sql`SELECT count(*)::int AS total FROM jobs
+          WHERE entity_id = ${episodeId} AND type = 'IDENTIFY_SPEAKERS'`)[0]?.total,
+        1,
+      );
       assertEquals((await listTranscripts(sql, episodeId)).map((run) => run.speakerCount).sort(), [
         2,
         3,

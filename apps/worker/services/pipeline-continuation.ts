@@ -12,7 +12,8 @@ export function shouldContinuePipeline(job: Pick<Job, "type" | "payload">): bool
 export function nextPipelineStep(
   job: Pick<Job, "type" | "payload">,
 ): NextPipelineStep | null {
-  // A transcript must be selected before identifying people or indexing it.
+  // Saving the first transcript atomically selects it and queues identification.
+  // Additional variants wait for manual selection, so neither needs a generic next step.
   if (job.type === "PROCESS_AUDIO_ML") return null;
   if (!shouldContinuePipeline(job)) return null;
   const next: Partial<Record<JobType, NextPipelineStep>> = {

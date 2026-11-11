@@ -1,6 +1,18 @@
 import { assertEquals, assertStringIncludes } from "@std/assert";
 import { transcriptComparison, transcriptLabel, transcriptVariantsSection } from "./transcripts.ts";
 
+Deno.test("jediný vybraný přepis nevyzývá k výběru ani porovnání", () => {
+  const output = transcriptVariantsSection(
+    { id: "episode", activeProcessingRunId: "run", transcriptSelectionPending: false },
+    [{ id: "run", startedAt: "2026-10-26T10:00:00Z" }],
+    false,
+  );
+  assertStringIncludes(output, "Vybraný přepis");
+  assertStringIncludes(output, "Zobrazit přepis");
+  assertEquals(output.includes("Použít pro přiřazení hlasů"), false);
+  assertEquals(output.includes("Zobrazit / porovnat"), false);
+});
+
 Deno.test("varianty ukazují model, samostatný počet hlasů a nutnost vybrat přepis", () => {
   const run = {
     id: "run",

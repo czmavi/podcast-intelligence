@@ -99,6 +99,7 @@ Deno.test({
         utteranceId,
         personId: guestId,
         source: "manual",
+        speakerLabel: "Existující host",
       });
       assertEquals(
         await assignSpeaker(sql, clusterId, {
@@ -160,6 +161,7 @@ Deno.test({
         utteranceId,
         personId: newGuestId,
         source: "cluster",
+        speakerLabel: "Žofie Testovací",
       });
 
       const assignment = (await sql`
