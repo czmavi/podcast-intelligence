@@ -308,11 +308,13 @@ epizod může Answer server obsloužit až dva dotazy najednou: samostatný kont
 zůstávají váhy v unified paměti, ale model neprovádí inference. Provider je ve výchozím stavu
 vypnutý a jeho selhání nezablokuje vyhledání zdrojů.
 
-Formulář „Otázka nad zdroji“ umí pro každý dotaz přepnout mezi lokálním ThinkingCapem a modely
-OpenAI `gpt-5.6-luna`, `gpt-6.1-sol`, `gpt-6-sol` a `gpt-6-luna` přes Chat Completions API. Všechny
-volby OpenAI používají stávající `OPENAI_API_KEY`; bez něj jsou v nabídce nedostupné.
-`OPENAI_ANSWER_MODEL` zachovává přepsání modelu původní volby GPT-5.6 Luna; nové volby posílají své
-vlastní pevné API ID. Timeout, výstupní limit a reasoning sdílejí nastavení
+Formulář „Otázka nad zdroji“ a požadavky na `/api/ask` bez parametru `answerProvider` používají při
+nastaveném `OPENAI_API_KEY` model `gpt-6.1-sol`. Bez klíče se použije lokální ThinkingCap, pokud je
+nakonfigurovaný. Formulář „Otázka nad zdroji“ umí pro každý dotaz přepnout mezi lokálním
+ThinkingCapem a modely OpenAI `gpt-5.6-luna`, `gpt-6.1-sol`, `gpt-6-sol` a `gpt-6-luna` přes Chat
+Completions API. Všechny volby OpenAI používají stávající `OPENAI_API_KEY`; bez něj jsou v nabídce
+nedostupné. `OPENAI_ANSWER_MODEL` zachovává přepsání modelu původní volby GPT-5.6 Luna; nové volby
+posílají své vlastní pevné API ID. Timeout, výstupní limit a reasoning sdílejí nastavení
 `OPENAI_ANSWER_TIMEOUT_MS`, `OPENAI_ANSWER_MAX_TOKENS` a `OPENAI_ANSWER_REASONING_EFFORT`. Výchozí
 effort je `low` a limit 4000 tokenů. OpenAI větev neposílá vLLM-specifické parametry a používá
 `max_completion_tokens`; finální odpověď prochází stejnou validací JSON a source IDs jako lokální
@@ -324,13 +326,17 @@ JSON odpovědi. Ostatní nové modely `none` podporují. Názvy a parametry byly
 OpenAI opouštějí dohledané přepisové úryvky lokální síť a jsou odeslány do OpenAI API, na což UI
 výslovně upozorňuje.
 
-Analýza vybírá nejvýše 16 úryvků, obvykle nejvýše dva z jedné epizody; při explicitním filtru
-epizody může použít více samostatných pasáží z téhož dílu. Výběr má přednostně pokrýt různé díly.
-Databázový limit kandidátů se uplatňuje až po odstranění identických textů a vyvážení epizod, takže
-opakování v jednom přepisu nevytlačí další díly. Dlouhé opakující se ASR smyčky a výrazně
-překrývající se pasáže se do podkladů nezařazují; původní přepis zůstává beze změny. Krátké
-vyhledávací termíny (například samostatné „N“) se hledají přesně. Počet v průběhu odpovědi označuje
-vybrané úryvky a epizody, nikoli celkový počet zmínek v archivu. Tato úprava nevyžaduje reindexaci.
+U otázek na vývoj v čase aplikace rozšíří dotaz podle prvních úryvků a vybere až osm zdrojů s
+ohledem na datum a relevanci.
+
+U ostatních otázek analýza vybírá nejvýše 16 úryvků, obvykle nejvýše dva z jedné epizody; při
+explicitním filtru epizody může použít více samostatných pasáží z téhož dílu. Výběr má přednostně
+pokrýt různé díly. Databázový limit kandidátů se uplatňuje až po odstranění identických textů a
+vyvážení epizod, takže opakování v jednom přepisu nevytlačí další díly. Dlouhé opakující se ASR
+smyčky a výrazně překrývající se pasáže se do podkladů nezařazují; původní přepis zůstává beze
+změny. Krátké vyhledávací termíny (například samostatné „N“) se hledají přesně. Počet v průběhu
+odpovědi označuje vybrané úryvky a epizody, nikoli celkový počet zmínek v archivu. Tato úprava
+nevyžaduje reindexaci.
 
 Před hledáním se od tématu oddělí běžný rámec otázky: například „Co říká o Deníku N“, „Jak hodnotí
 Deník N“ a „Jaký má názor na Deník N“ hledají stejné téma. Slovesa jako „hodnotí“ se nevyžadují

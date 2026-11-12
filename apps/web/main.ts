@@ -50,7 +50,11 @@ import {
 import { jobQueue } from "../../packages/domain/job-types.ts";
 import { DomainError, NotFoundError } from "../../packages/domain/errors.ts";
 import { importPodcast } from "../../packages/podcast-rss/importer.ts";
-import type { AnswerGenerationProvider, GroundingSource } from "../../packages/search/answer.ts";
+import {
+  addTokenUsage,
+  type AnswerGenerationProvider,
+  type GroundingSource,
+} from "../../packages/search/answer.ts";
 import {
   type AnswerProviderId,
   answerProviderIds,
@@ -58,7 +62,8 @@ import {
   openAiAnswerModels,
 } from "../../packages/search/answer-providers.ts";
 import { search, searchWithPlan } from "../../packages/search/search.ts";
-import { answerSearchQuery } from "../../packages/search/query.ts";
+import { answerSearchQuery, asksAboutChange } from "../../packages/search/query.ts";
+import { findAnswerSources as findTimelineSources } from "../../packages/search/answer-sources.ts";
 import { LocalTextEmbeddingProvider } from "../../packages/search/providers.ts";
 import { loadConfig } from "../../packages/shared/config.ts";
 import { formatTimestamp } from "../../packages/shared/time.ts";
@@ -105,6 +110,7 @@ const pushover = new PushoverClient(config);
 const embeddingProvider = new LocalTextEmbeddingProvider(config);
 const answerProviders = createAnswerProviders(config);
 const thinkingCapProvider = answerProviders.get("thinking-cap");
+const defaultAnswerProviderId = answerProviders.get("gpt-6.1-sol") ? "gpt-6.1-sol" : "thinking-cap";
 const staticRoot = join(dirname(fromFileUrl(import.meta.url)), "static");
 
 const askInputSchema = z.object({
@@ -123,7 +129,7 @@ function answerProviderFor(input: AskInput): {
   id: AnswerProviderId;
   provider: AnswerGenerationProvider | null;
 } {
-  const id = input.answerProvider ?? (thinkingCapProvider ? "thinking-cap" : "gpt-5.6-luna");
+  const id = input.answerProvider ?? defaultAnswerProviderId;
   return { id, provider: answerProviders.get(id) ?? null };
 }
 
@@ -193,7 +199,11 @@ async function recentJobs() {
   `;
 }
 
-async function findAnswerSources(input: AskInput): Promise<GroundingSource[]> {
+async function findAnswerSources(
+  input: AskInput,
+  onPhase?: (phase: "plan" | "rerank") => void,
+): ReturnType<typeof findTimelineSources> {
+  const provider = answerProviderFor(input).provider;
   const speakerRows = input.personId
     ? await sql`SELECT display_name FROM persons WHERE id = ${input.personId}`
     : [];
@@ -209,7 +219,24 @@ async function findAnswerSources(input: AskInput): Promise<GroundingSource[]> {
     mode: "fulltext" as const,
     precision: "balanced" as const,
   };
-  const provider = answerProviderFor(input).provider;
+  const asSources = (results: Awaited<ReturnType<typeof search>>) =>
+    results.map((result, index) => ({
+      sourceId: `source-${index + 1}`,
+      episodeId: result.episodeId,
+      episodeTitle: result.episodeTitle,
+      publishedAt: result.publishedAt,
+      startSeconds: result.startSeconds,
+      endSeconds: result.endSeconds,
+      speakerNames: (result.persons as Array<{ displayName: string }>).map((p) => p.displayName),
+      excerpt: result.text,
+    }));
+  const directSearch = () =>
+    search(sql, query, embeddingProvider, { lexicalMatch: "all", diversifyEpisodes: true });
+  if (asksAboutChange(input.question)) {
+    const initial = asSources(await directSearch()).slice(0, 8);
+    return await findTimelineSources(sql, input, provider, embeddingProvider, onPhase, initial);
+  }
+  onPhase?.("plan");
   const start = performance.now();
   const plan = await provider?.planSearch?.(input.question, selectedSpeakerName).catch(() => null);
   console.info(
@@ -221,17 +248,8 @@ async function findAnswerSources(input: AskInput): Promise<GroundingSource[]> {
   );
   const results = plan
     ? await searchWithPlan(sql, query, embeddingProvider, plan)
-    : await search(sql, query, embeddingProvider, { lexicalMatch: "all", diversifyEpisodes: true });
-  return results.map((result, index) => ({
-    sourceId: `source-${index + 1}`,
-    episodeId: result.episodeId,
-    episodeTitle: result.episodeTitle,
-    publishedAt: result.publishedAt,
-    startSeconds: result.startSeconds,
-    endSeconds: result.endSeconds,
-    speakerNames: (result.persons as Array<{ displayName: string }>).map((p) => p.displayName),
-    excerpt: result.text,
-  }));
+    : await directSearch();
+  return { sources: asSources(results), warnings: [] };
 }
 
 function streamAnswer(input: AskInput): Response {
@@ -246,7 +264,18 @@ function streamAnswer(input: AskInput): Response {
       };
       try {
         send({ type: "phase", phase: "search", message: "Hledám relevantní zdroje" });
-        sources = await findAnswerSources(input);
+        const retrieval = await findAnswerSources(
+          input,
+          (phase) =>
+            send({
+              type: "phase",
+              phase,
+              message: phase === "plan"
+                ? "Rozšiřuji hledání podle otázky a prvních shod"
+                : "Porovnávám úryvky s otázkou",
+            }),
+        );
+        sources = retrieval.sources;
         if (cancelled) return;
         send({
           type: "phase",
@@ -275,7 +304,8 @@ function streamAnswer(input: AskInput): Response {
             confidence: "low",
             sourceIds: [],
             sources,
-            warnings: ["Pro odpověď nebyly nalezeny žádné zdrojové úseky."],
+            warnings: [...retrieval.warnings, "Pro odpověď nebyly nalezeny žádné zdrojové úseky."],
+            ...(retrieval.usage ? { usage: retrieval.usage } : {}),
           });
           return;
         }
@@ -291,8 +321,8 @@ function streamAnswer(input: AskInput): Response {
               type: "complete",
               ...event.answer,
               sources,
-              warnings: [],
-              ...(event.usage ? { usage: event.usage } : {}),
+              warnings: retrieval.warnings,
+              usage: addTokenUsage(retrieval.usage, event.usage),
             });
           } else {
             send(event);
@@ -868,7 +898,7 @@ async function api(request: Request, url: URL): Promise<Response | null> {
       return streamAnswer(input);
     }
     const selected = answerProviderFor(input);
-    const sources = await findAnswerSources(input);
+    const { sources, warnings } = await findAnswerSources(input);
     if (!selected.provider) {
       return json({
         answer: null,
@@ -886,7 +916,7 @@ async function api(request: Request, url: URL): Promise<Response | null> {
         confidence: "low",
         sourceIds: [],
         sources,
-        warnings: ["Pro odpověď nebyly nalezeny žádné zdrojové úseky."],
+        warnings: [...warnings, "Pro odpověď nebyly nalezeny žádné zdrojové úseky."],
       });
     }
     try {
@@ -894,7 +924,7 @@ async function api(request: Request, url: URL): Promise<Response | null> {
         question: input.question,
         sources,
       });
-      return json({ ...generated, sources, warnings: [] });
+      return json({ ...generated, sources, warnings });
     } catch (error) {
       console.error(JSON.stringify({
         event: "answer_generation_failed",
@@ -905,7 +935,10 @@ async function api(request: Request, url: URL): Promise<Response | null> {
         confidence: "low",
         sourceIds: [],
         sources,
-        warnings: ["Generování odpovědi selhalo; vracím pouze dohledané zdrojové úseky."],
+        warnings: [
+          ...warnings,
+          "Generování odpovědi selhalo; vracím pouze dohledané zdrojové úseky.",
+        ],
       });
     }
   }
@@ -1631,14 +1664,14 @@ async function pages(url: URL): Promise<Response> {
           <option value="">všichni mluvčí</option></select></label>
         <label>Model odpovědi <select name="answerProvider" required>
           <option value="thinking-cap"${
-        thinkingCapProvider ? "" : " disabled"
+        thinkingCapProvider
+          ? (defaultAnswerProviderId === "thinking-cap" ? " selected" : "")
+          : " disabled"
       }>ThinkingCap · lokální</option>
           ${
         openAiAnswerModels.map((model) =>
           `<option value="${model.id}"${answerProviders.get(model.id) ? "" : " disabled"}${
-            !thinkingCapProvider && model.id === "gpt-5.6-luna" && answerProviders.get(model.id)
-              ? " selected"
-              : ""
+            model.id === defaultAnswerProviderId ? " selected" : ""
           }>${model.label} · OpenAI</option>`
         ).join("")
       }
@@ -1647,8 +1680,8 @@ async function pages(url: URL): Promise<Response> {
           <textarea name="question" maxlength="1000"
             placeholder="Například: Jak Michal Půr hodnotí Deník N a jak se jeho názor v čase měnil?"
             required></textarea></label>
-        <div class="ask-submit-row"><p class="meta">Při volbě modelu OpenAI se dohledané
-          přepisové úryvky odešlou do OpenAI API.</p>
+        <div class="ask-submit-row"><p class="meta">Při volbě modelu OpenAI se otázka a vybrané
+          úryvky odešlou do OpenAI API pro rozšíření hledání a sestavení odpovědi.</p>
           <button type="submit">Analyzovat zdroje</button></div></form>
         <div id="answer" class="results"></div></section>`,
     ));

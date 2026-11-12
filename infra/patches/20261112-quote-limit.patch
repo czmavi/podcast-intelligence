@@ -1,0 +1,67 @@
+--- a/packages/search/answer.ts
++++ b/packages/search/answer.ts
+@@ -119,13 +119,15 @@
+   responseStyle?: "summary" | "quotes";
+ }
+ 
++const proposedQuoteSchema = z.object({
++  sourceId: z.string(),
++  quote: z.string().trim().min(10).max(2000),
++});
++
+ const quotedAnswerSchema = z.object({
+   sections: z.array(z.object({
+     title: z.string().trim().min(1).max(100),
+-    quotes: z.array(z.object({
+-      sourceId: z.string(),
+-      quote: z.string().trim().min(10).max(2000),
+-    })).min(1).max(3),
++    quotes: z.array(z.unknown()).min(1),
+   })).max(8),
+ });
+ 
+@@ -512,21 +514,21 @@
+     const normalize = (value: string) => value.replace(/\s+/gu, " ").trim();
+     const seen = new Set<string>();
+     const sections = result.sections.map((section) => {
+-      const quotes = section.quotes.map(({ sourceId, quote }) => {
++      const quotes: { text: string; sourceId: string }[] = [];
++      for (const candidate of section.quotes) {
++        const parsed = proposedQuoteSchema.safeParse(candidate);
++        if (!parsed.success) continue;
++        const { sourceId, quote } = parsed.data;
+         const source = byId.get(sourceId);
+-        if (!source) throw new Error("Generativní model odkázal na neznámý zdroj.");
+-        const original = normalize(source.excerpt);
+-        const requested = normalize(quote);
+-        const text = literalQuote(original, requested);
+-        if (text === null) throw new Error("Citace modelu se neshoduje s původním přepisem.");
+-        // Zobrazujeme text načtený z přepisu, nikoli neověřený výstup modelu.
+-        return { text, sourceId };
+-      }).filter((quote) => {
+-        const key = quote.text.toLocaleLowerCase("cs");
+-        if (seen.has(key)) return false;
++        if (!source) continue;
++        const text = literalQuote(normalize(source.excerpt), normalize(quote));
++        if (text === null) continue;
++        const key = text.toLocaleLowerCase("cs");
++        if (seen.has(key)) continue;
+         seen.add(key);
+-        return true;
+-      });
++        quotes.push({ text, sourceId });
++        if (quotes.length === 3) break;
++      }
+       return {
+         title: section.title,
+         text: quotes.map((quote) => `„${quote.text}“`).join("\n\n"),
+@@ -534,6 +536,9 @@
+         quotes,
+       };
+     }).filter((section) => section.quotes.length > 0);
++    if (result.sections.length && !sections.length) {
++      throw new Error("Žádná navržená citace se neshoduje s doloženým zdrojem.");
++    }
+     return {
+       answer: sections.length
+         ? "Vybrané doslovné citace z přepisů, uspořádané podle témat."

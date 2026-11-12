@@ -8,7 +8,7 @@ export interface TextEmbeddingProvider {
   readonly minRerankScore: number;
   embedDocuments(texts: string[]): Promise<number[][]>;
   embedQuery(text: string): Promise<number[]>;
-  rerank(query: string, documents: string[]): Promise<number[]>;
+  rerank(query: string, documents: string[], signal?: AbortSignal): Promise<number[]>;
 }
 
 const responseSchema = z.object({
@@ -64,7 +64,7 @@ export class LocalTextEmbeddingProvider implements TextEmbeddingProvider {
     return embedding;
   }
 
-  async rerank(query: string, documents: string[]): Promise<number[]> {
+  async rerank(query: string, documents: string[], signal?: AbortSignal): Promise<number[]> {
     const headers = new Headers({ "content-type": "application/json" });
     if (this.config.AUDIO_ML_API_TOKEN) {
       headers.set("authorization", `Bearer ${this.config.AUDIO_ML_API_TOKEN}`);
@@ -73,7 +73,7 @@ export class LocalTextEmbeddingProvider implements TextEmbeddingProvider {
       method: "POST",
       headers,
       body: JSON.stringify({ query, documents }),
-      signal: AbortSignal.timeout(300_000),
+      signal: signal ?? AbortSignal.timeout(300_000),
     });
     if (!response.ok) throw new Error(`Text reranker vrátil HTTP ${response.status}.`);
     const output = rerankResponseSchema.parse(await response.json());

@@ -7,6 +7,7 @@ import { loadConfig } from "../shared/config.ts";
 import { episodeStorage } from "../shared/paths.ts";
 import type { TextEmbeddingProvider } from "./providers.ts";
 import { search } from "./search.ts";
+import { findAnswerSources } from "./answer-sources.ts";
 
 const enabled = Deno.env.get("RUN_INTEGRATION_TESTS") === "1";
 
@@ -123,6 +124,13 @@ Deno.test({
       );
       assertEquals(focusedResults.length, 1);
       assertEquals(focusedResults[0]?.text, "ragexclusiontoken Martin Vohánka");
+      const { sources } = await findAnswerSources(sql, {
+        question: "Co říkal o Martinu Voháňkovi?",
+        podcastId,
+        personId,
+      }, null);
+      assertEquals(sources.length, 1);
+      assertEquals(sources[0]?.excerpt, "ragexclusiontoken Martin Vohánka");
       assertEquals(
         await search(sql, { ...input, episodeId: crypto.randomUUID() }, provider),
         [],
@@ -265,6 +273,7 @@ Deno.test({
         async (request) => {
           const body = await request.json();
           const data = JSON.parse(body.messages[1].content);
+          if (!data.sources) return new Response("Planner unavailable", { status: 503 });
           return Response.json({
             choices: [{
               message: {

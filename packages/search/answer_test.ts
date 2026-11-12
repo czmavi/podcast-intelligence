@@ -1,3 +1,5 @@
+import { selectEvidence } from "./answer-sources.ts";
+
 import { assertEquals, assertRejects } from "@std/assert";
 import {
   type AnswerGenerationStreamEvent,
@@ -36,6 +38,29 @@ function providerWithResponse(content: string) {
   });
   return { provider, requestBody: () => requestBody };
 }
+
+Deno.test("plán hledání vrátí omezené alternativy a odmítne změnu filtrů modelem", async () => {
+  const plan = {
+    passageQuery: "Koho preferuje?",
+    names: ["Harris"],
+    alternatives: ["volby v USA", "kandidátka"],
+    timeline: true,
+  };
+  const input = { question: "Jak se vyvíjel názor?", hints: [] };
+  const setup = providerWithResponse(JSON.stringify(plan));
+  assertEquals(await setup.provider.expandSearch(input), plan);
+  assertEquals(setup.requestBody()?.reasoning_effort, "none");
+  for (
+    const wrong of [{ ...plan, personId: "cizí filtr" }, {
+      ...plan,
+      alternatives: Array(6).fill("volby"),
+    }]
+  ) {
+    await assertRejects(() =>
+      providerWithResponse(JSON.stringify(wrong)).provider.expandSearch(input)
+    );
+  }
+});
 
 Deno.test("answer provider validuje uzemněnou JSON odpověď", async () => {
   const setup = providerWithResponse(
@@ -394,4 +419,18 @@ Deno.test("lokální režim odmítne změněnou citaci, spojené fragmenty a ciz
     });
     assertEquals(events.some((e) => e.type === "delta" || e.type === "complete"), false);
   }
+});
+
+Deno.test("časový výběr propustí slabší pozdější důkaz, ale ne letmou nejnovější zmínku", () => {
+  const passages = Array.from({ length: 12 }, (_, i) => ({
+    ...sources[0]!,
+    episodeId: String(i),
+    sourceId: "s" + i,
+    publishedAt: `2024-10-${String(i + 1).padStart(2, "0")}`,
+  }));
+  const scores = [0.46, ...Array<number>(9).fill(0.9), 0.42, 0.01];
+  const chosen = selectEvidence(passages, scores, true, 0.2);
+  assertEquals(chosen.length, 8);
+  assertEquals([chosen[0]?.sourceId, chosen.at(-1)?.sourceId], ["s0", "s10"]);
+  assertEquals(selectEvidence(passages, scores.map(() => 0.01), true, 0.2), []);
 });

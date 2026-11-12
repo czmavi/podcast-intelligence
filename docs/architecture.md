@@ -127,10 +127,26 @@ Chunky mají přibližně 140 slov, zachovávají celé utterances a vazební ta
 osoby. Hybrid vybere kandidáty pomocí fulltextu a cosine similarity nad BGE-M3, poté je znovu seřadí
 multilingual cross-encoderem. Obecná slova požadavku jako „citace“ neblokují lexikální kandidáty a
 UI nabízí přísný, vyvážený a širší práh relevance. `/api/ask` vrací strukturované zdroje; bez
-generativního provideru odpověď negeneruje, aby endpoint nehalucinoval. Volitelný
-`openai-compatible` Answer provider posílá otázku a nejvýše osm dohledaných úryvků do odděleného
-model serveru. Odpověď musí být validní JSON, smí odkazovat jen na předané `sourceId` a při chybě se
-endpoint bezpečně vrátí k samotným zdrojům. Výchozí stav provideru je `disabled`.
+generativního provideru odpověď negeneruje. Pro běžné otázky web používá plán s operátory `any` a
+`all` a vybírá až 16 úryvků. U otázek na vývoj v čase nejprve vyhledá téma normalizovaným prefixovým
+fulltextem. Zvolený model dostane otázku a nejvýše čtyři krátké ukázky z prvních shod. Navrhne až
+pět alternativních hledání, čtyři jména a určí, zda otázka sleduje vývoj v čase. Slova uvnitř jedné
+varianty se hledají společně; mezi variantami stačí shoda kterékoli z nich. Původní dotaz zůstává
+zvýhodněný. Filtry určuje pouze uživatel a při výběru osoby se shoda i citace počítají jen z jejích
+promluv. Chyba, neplatný plán nebo timeout vrátí první nálezy s upozorněním.
+
+Rozšířený fulltext zvýhodní společnou zmínku porovnávaných osob. Do nejvýše 48 kandidátů zahrne i
+shody z různých období. Lokální reranker posoudí, zda pasáž odpovídá otázce na jediný výrok. U
+časové otázky, kde si model musel jména účastníků domyslet, hodnotí první výběr vůči původní otázce.
+Najde-li přesvědčivou shodu, zvolený model může z nejvýše čtyř nejlépe hodnocených pasáží jednou
+upřesnit hledání. Nové varianty spustí další průchod za stejných filtrů. Výběry se sloučí bez
+duplicit; dříve nalezený důkaz nezmizí jen proto, že se dotaz změnil. Mezi průchozími shodami se při
+vývoji názoru rezervuje místo pro první i poslední datovanou epizodu a další různé díly, dohromady
+nejvýše osm úryvků. Když reranker není dostupný, použije se časově rozložený fulltext s upozorněním.
+Model odpovídá jen z těchto přepisů, nikoli z navržených jmen. Má odlišit preferenci od prognózy a
+přiznat mezery mezi doloženými výroky. Volitelná analýza úryvků používá stávající nastavení
+reasoning effort zvoleného provideru. Výsledek musí být validní JSON a smí odkazovat jen na předané
+`sourceId`. Výchozí stav lokálního provideru je `disabled`.
 
 ## Bezpečnost
 

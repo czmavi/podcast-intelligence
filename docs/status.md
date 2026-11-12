@@ -1,5 +1,30 @@
 # Stav implementace
 
+## Výchozí model odpovědí 12. 11. 2026
+
+Produkční web na NAS předvybírá ve formuláři GPT-6.1 Sol a používá jej také pro požadavky na
+`/api/ask` bez uvedeného modelu. Ruční výběr dál platí pro jednotlivý dotaz. Při nasazení jsme
+ověřili výběr ve formuláři, zdraví webu a stejné časy startu workeru a PostgreSQL před výměnou webu
+a po ní. [Rozdíl proti předchozímu produkčnímu webu](../infra/patches/20261112-default-sol.patch).
+
+## Produkční oprava citací ThinkingCap 12. 11. 2026
+
+Web `podcast-web:verified-quotes-20261112` vybírá z každé sekce až tři různé citace v pořadí modelu.
+U každé kontroluje odkaz na zdroj a doslovnou shodu se souvislým úsekem přepisu. Nedoložený návrh
+přeskočí. Pokud model navrhl citace a žádná neprojde kontrolou, API vrátí zdroje s upozorněním.
+Regresní test na produkční verzi pokryl čtyři platné návrhy, směs platných a neplatných návrhů i
+odmítnutí zcela nedoloženého výběru.
+
+Pracovní kopie obsahuje odlišnou rozpracovanou implementaci vyhledávání. Přesný rozdíl proti
+produkční verzi s plánovačem je uložen v
+[patchi pro nasazený web](../infra/patches/20261112-quote-limit.patch). Při nasazení pokračoval ML
+job `9d00b4d8-e5ff-4d09-bbc7-3bf337928ab9` na prvním pokusu. Po dobu výměny webu byly ID a časy
+startu workeru a PostgreSQL totožné.
+
+Živá kontrola původní otázky na americké prezidentské kandidáty přes `/api/ask` s filtry Insider a
+Michal Půr vrátila 16 zdrojů a odpověď bez varování. Všech šest citací ve čtyřech sekcích (1, 3,
+1, 1) prošlo porovnáním s odkazovanými přepisy.
+
 ## Modelové plánování otázek nasazené 2026-11-10
 
 Web `podcast-web:planner-20261110` používá pro otázky nad zdroji validovaný plán od zvoleného
@@ -149,6 +174,16 @@ Tuto první verzi v 22:24 CET nahradilo obecné řešení popsané výše.
   nasazené od 2026-10-30 v 19:55 CET; viz dokončené nasazení konfigurace PostgreSQL výše.
 
 ## Hotové a ověřené
+
+- AI rozšíření dotazu v `/api/ask` a časový výběr zdrojů; regresní test na izolovaném PostgreSQL
+  pokrývá otázku s kandidáty i bez jmen, pozdější samostatnou zmínku, přísný filtr mluvčího, datum,
+  podcast, aktivní run, vyloučené díly a návrat k původnímu hledání při chybě modelu,
+- kontrola retrievalu v archivu Insider (12. 11. 2026, pouze čtení): dotaz na Michala Půra s
+  Harrisovou a Trumpem našel mj. přímou preferenci v Briefingu #52 (25. 7. 2024) a povolební
+  hodnocení v Briefingu #65 (6. 11. 2024). Obecná formulace našla mj. Briefing #54 (8. 8. 2024), ale
+  také pasáže o Bidenovi. Při posledním pokusu nedoběhlo doplňující hledání a vrátil se první výběr
+  s upozorněním. Nejde o měření úplnosti archivu ani kvality finální odpovědi. Změna zatím není
+  nasazená,
 
 - oprava převodu otázek na fulltext (2026-10-29, nasazeno v 17:31 CET): přesný dotaz ze snímku „Jak
   hodnotí deník n“ s filtrem Michal Půr vracel nulu, protože `hodnoti:*` zůstával povinným termínem.
@@ -418,9 +453,9 @@ Tuto první verzi v 22:24 CET nahradilo obecné řešení popsané výše.
 ## Známé problémy
 
 - český fulltext používá konfiguraci `simple`,
-- reasoning je záměrně vypnutý pro běžné RAG dotazy; experimentální režim je konfigurovatelný přes
-  effort, samostatný limit reasoning tokenů a vyšší celkový výstupní limit, ale před trvalým
-  zapnutím vyžaduje širší eval kvality a latence,
+- u lokálního provideru je reasoning ve výchozím nastavení vypnutý; lze jej nastavit přes effort,
+  samostatný limit reasoning tokenů a vyšší celkový výstupní limit, ale před trvalým zapnutím
+  vyžaduje širší eval kvality a latence,
 - plné ML závislosti a modely nebyly lokálně staženy; podporovaná a doporučená cesta je Python 3.11
   kontejner,
 - celé modelové testy jsou záměrně oddělené od rychlých unit testů.

@@ -1,4 +1,28 @@
+import { z } from "zod";
+
+export const answerSearchPlanSchema = z.object({
+  alternatives: z.array(z.string().trim().min(2).max(96)).max(5),
+  names: z.array(z.string().trim().min(2).max(64)).max(4),
+  passageQuery: z.string().trim().min(2).max(240),
+  timeline: z.boolean(),
+}).strict();
+
+export function asksAboutChange(question: string): boolean {
+  return /\b(vyvij\w*|vyvoj\w*|vyvinul\w*|(?:z?menil|zmeny)\w*|v case|v prubehu|postupem casu|chronolog\w*)\b/u
+    .test(foldSearchText(question));
+}
+
 const answerFramingWords = new Set([
+  "a",
+  "bude",
+  "jeho",
+  "jeji",
+  "lepsi",
+  "na",
+  "nebo",
+  "to",
+  "vyvijel",
+  "vyvijela",
   "co",
   "hodnoti",
   "hodnotil",
@@ -71,6 +95,10 @@ const temporalQuestionTail =
  * Vybraný mluvčí je databázový filtr, nikoli součást hledaného textu.
  */
 export function answerSearchQuery(question: string, selectedSpeakerName?: string): string {
+  return focusedSearchTerms(question, selectedSpeakerName) || question.trim();
+}
+
+export function focusedSearchTerms(question: string, selectedSpeakerName?: string): string {
   const speakerWords = new Set(words(selectedSpeakerName ?? "").map(foldSearchText));
   const questionWords = words(question);
   const topicWordCount = words(
@@ -80,10 +108,11 @@ export function answerSearchQuery(question: string, selectedSpeakerName?: string
     const normalized = foldSearchText(word);
     return !answerFramingWords.has(normalized) && !speakerWords.has(normalized);
   });
-  return focused.length > 0 ? focused.join(" ") : question.trim();
+  return focused.join(" ");
 }
 
 function lexicalRoot(term: string): string {
+  if (term.length >= 6 && /(?:sk|ck)[ayie]$/u.test(term)) return term.slice(0, -1);
   if (term.length >= 7 && term.endsWith("ovi")) return term.slice(0, -3);
   if (term.length >= 6 && term.endsWith("u")) return term.slice(0, -1);
   return term;
