@@ -1,5 +1,11 @@
 # Stav implementace
 
+## Audit závislostí 13. 11. 2026
+
+V pracovní kopii byl RSS parser `fast-xml-parser` aktualizován z 5.2.5 na 5.12.0 a `zod` z 3.25.76
+na 4.6.7. Po aktualizaci `deno audit` hlásí nula známých zranitelností oproti původním devíti.
+Prošlo 126 jednotkových testů a 25 integračních testů nad samostatným PostgreSQL.
+
 ## Výchozí model odpovědí 12. 11. 2026
 
 Produkční web na NAS předvybírá ve formuláři GPT-6.1 Sol a používá jej také pro požadavky na
